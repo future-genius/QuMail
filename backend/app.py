@@ -15,6 +15,9 @@ python backend/app.py
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+import smtplib
+import imaplib
+import email
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
 import sqlite3
@@ -266,6 +269,139 @@ def list_keys():
             
     except Exception as e:
         print(f"❌ Error listing keys: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/validate_smtp', methods=['POST'])
+def validate_smtp():
+    """Validate SMTP credentials"""
+    try:
+        data = request.get_json()
+        smtp_host = data.get('smtp_host')
+        smtp_port = data.get('smtp_port')
+        username = data.get('username')
+        password = data.get('password')
+        
+        if not all([smtp_host, smtp_port, username, password]):
+            return jsonify({'error': 'Missing required fields'}), 400
+        
+        # Test SMTP connection
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
+            server.starttls()
+            server.login(username, password)
+        
+        return jsonify({'status': 'success', 'message': 'SMTP connection successful'})
+        
+    except smtplib.SMTPAuthenticationError:
+        return jsonify({'error': 'Invalid email credentials'}), 401
+    except Exception as e:
+        return jsonify({'error': f'SMTP connection failed: {str(e)}'}), 500
+
+@app.route('/validate_imap', methods=['POST'])
+def validate_imap():
+    """Validate IMAP credentials"""
+    try:
+        data = request.get_json()
+        imap_host = data.get('imap_host')
+        imap_port = data.get('imap_port')
+        username = data.get('username')
+        password = data.get('password')
+        
+        if not all([imap_host, imap_port, username, password]):
+            return jsonify({'error': 'Missing required fields'}), 400
+        
+        # Test IMAP connection
+        with imaplib.IMAP4_SSL(imap_host, imap_port) as imap:
+            imap.login(username, password)
+        
+        return jsonify({'status': 'success', 'message': 'IMAP connection successful'})
+        
+    except imaplib.IMAP4.error:
+        return jsonify({'error': 'Invalid email credentials'}), 401
+    except Exception as e:
+        return jsonify({'error': f'IMAP connection failed: {str(e)}'}), 500
+
+@app.route('/send_email', methods=['POST'])
+def send_email_api():
+    """Send encrypted email via API"""
+    try:
+        data = request.get_json()
+        
+        # Extract email data
+        to_address = data.get('to')
+        subject = data.get('subject')
+        body = data.get('body')
+        
+        # Extract credentials
+        credentials = data.get('credentials', {})
+        smtp_host = credentials.get('smtpHost')
+        smtp_port = credentials.get('smtpPort')
+        username = credentials.get('email')
+        password = credentials.get('password')
+        
+        if not all([to_address, subject, body, smtp_host, smtp_port, username, password]):
+            return jsonify({'error': 'Missing required fields'}), 400
+        
+        # Request QKD key
+        qkd_key = key_manager.request_key(username, to_address, 3600)
+        
+        # Encrypt message
+        key = base64.b64decode(qkd_key['key_b64'])
+        cipher = AES.new(key, AES.MODE_GCM)
+        ciphertext, tag = cipher.encrypt_and_digest(body.encode('utf-8'))
+        
+        encrypted_payload = {
+            'version': '1.0',
+            'algorithm': 'AES-256-GCM',
+            'key_id': qkd_key['key_id'],
+            'ciphertext': base64.b64encode(ciphertext).decode('utf-8'),
+            'nonce': base64.b64encode(cipher.nonce).decode('utf-8'),
+            'tag': base64.b64encode(tag).decode('utf-8'),
+            'timestamp': datetime.datetime.utcnow().isoformat() + 'Z'
+        }
+        
+        # Create email
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
+        
+        msg = MIMEMultipart()
+        msg['From'] = username
+        msg['To'] = to_address
+        msg['Subject'] = subject
+        msg['X-QuMail-Encrypted'] = 'AES-GCM'
+        msg['X-QuMail-Key-ID'] = qkd_key['key_id']
+        msg['X-QuMail-Version'] = '1.0'
+        msg['X-QuMail-Timestamp'] = encrypted_payload['timestamp']
+        
+        email_body = f"""This message was encrypted using QuMail quantum-secure encryption.
+
+To decrypt this message, you need QuMail client software and access to the QKD key.
+
+Key ID: {qkd_key['key_id']}
+Algorithm: AES-256-GCM
+Encrypted at: {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC
+
+--- ENCRYPTED PAYLOAD ---
+{json.dumps(encrypted_payload, indent=2)}
+--- END ENCRYPTED PAYLOAD ---
+
+QuMail - Quantum-Secure Email Communication"""
+        
+        msg.attach(MIMEText(email_body, 'plain'))
+        
+        # Send email
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
+            server.starttls()
+            server.login(username, password)
+            server.send_message(msg)
+        
+        return jsonify({
+            'status': 'success',
+            'key_id': qkd_key['key_id'],
+            'message': 'Email sent successfully'
+        })
+        
+    except Exception as e:
+        print(f"❌ Error sending email: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/health', methods=['GET'])

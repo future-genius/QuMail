@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Shield, Key, Mail, Send, RefreshCw, Lock, Unlock, Clock, Database } from 'lucide-react';
+import { Shield, Key, Mail, Send, RefreshCw, Lock, Unlock, Clock, Database, LogOut, User } from 'lucide-react';
+import LoginForm, { EmailCredentials } from './components/LoginForm';
+import StatusMessage from './components/StatusMessage';
+import { useAuth } from './hooks/useAuth';
 
 // Types
 interface QKDKey {
@@ -108,6 +111,13 @@ function App() {
   
   const [sending, setSending] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<{
+    type: 'success' | 'error' | 'warning' | 'info';
+    message: string;
+  } | null>(null);
+  
+  // Authentication
+  const { isAuthenticated, credentials, isLoading: authLoading, error: authError, login, logout } = useAuth();
 
   useEffect(() => {
     // Initialize with some demo emails
@@ -143,7 +153,18 @@ function App() {
 
   const handleSendEmail = async () => {
     if (!composeForm.to || !composeForm.subject || !composeForm.body) {
-      alert('Please fill in all fields');
+      setStatusMessage({
+        type: 'error',
+        message: 'Please fill in all fields'
+      });
+      return;
+    }
+
+    if (!credentials) {
+      setStatusMessage({
+        type: 'error',
+        message: 'Please log in first'
+      });
       return;
     }
 
@@ -175,11 +196,17 @@ function App() {
       setQkdKeys(prev => [...prev, qkdKey]);
       setComposeForm({ to: '', subject: '', body: '' });
       
-      alert('Email sent successfully with quantum-secure encryption!');
+      setStatusMessage({
+        type: 'success',
+        message: 'Email sent successfully with quantum-secure encryption!'
+      });
       setCurrentView('inbox');
       
     } catch (error) {
-      alert('Failed to send email');
+      setStatusMessage({
+        type: 'error',
+        message: 'Failed to send email'
+      });
     } finally {
       setSending(false);
     }
@@ -190,7 +217,10 @@ function App() {
 
     const key = keyManager.getKey(email.key_id);
     if (!key) {
-      alert('Decryption key not found or expired');
+      setStatusMessage({
+        type: 'error',
+        message: 'Decryption key not found or expired'
+      });
       return;
     }
 
@@ -203,10 +233,21 @@ function App() {
   };
 
   const handleRefreshInbox = async () => {
+    if (!credentials) {
+      setStatusMessage({
+        type: 'error',
+        message: 'Please log in first'
+      });
+      return;
+    }
+
     setRefreshing(true);
     await new Promise(resolve => setTimeout(resolve, 1500));
     setRefreshing(false);
-    alert('Inbox refreshed - 0 new messages');
+    setStatusMessage({
+      type: 'info',
+      message: 'Inbox refreshed - 0 new messages'
+    });
   };
 
   const updateQkdKeys = () => {
@@ -217,6 +258,44 @@ function App() {
     const interval = setInterval(updateQkdKeys, 1000);
     return () => clearInterval(interval);
   }, []);
+
+  const handleLogin = async (loginCredentials: EmailCredentials) => {
+    const success = await login(loginCredentials);
+    if (success) {
+      setStatusMessage({
+        type: 'success',
+        message: 'Login successful! Welcome to QuMail.'
+      });
+    }
+  };
+
+  const handleLogout = () => {
+    logout();
+    setStatusMessage({
+      type: 'info',
+      message: 'Logged out successfully'
+    });
+  };
+
+  // Show login form if not authenticated
+  if (!isAuthenticated) {
+    return (
+      <>
+        <LoginForm 
+          onLogin={handleLogin}
+          isLoading={authLoading}
+          error={authError}
+        />
+        {statusMessage && (
+          <StatusMessage
+            type={statusMessage.type}
+            message={statusMessage.message}
+            onClose={() => setStatusMessage(null)}
+          />
+        )}
+      </>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-800">
@@ -232,7 +311,15 @@ function App() {
               </span>
             </div>
             
-            <nav className="flex gap-1">
+            <div className="flex items-center gap-4">
+              {/* User Info */}
+              <div className="flex items-center gap-2 text-slate-300">
+                <User className="w-4 h-4" />
+                <span className="text-sm">{credentials?.email}</span>
+              </div>
+              
+              {/* Navigation */}
+              <nav className="flex gap-1">
               {[
                 { id: 'compose', label: 'Compose', icon: Mail },
                 { id: 'inbox', label: 'Inbox', icon: Database },
@@ -251,7 +338,17 @@ function App() {
                   {label}
                 </button>
               ))}
-            </nav>
+              </nav>
+              
+              {/* Logout Button */}
+              <button
+                onClick={handleLogout}
+                className="flex items-center gap-2 px-3 py-2 text-slate-300 hover:bg-slate-700 hover:text-white rounded-lg transition-all"
+              >
+                <LogOut className="w-4 h-4" />
+                Logout
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -498,6 +595,15 @@ function App() {
           </div>
         </div>
       </div>
+
+      {/* Status Messages */}
+      {statusMessage && (
+        <StatusMessage
+          type={statusMessage.type}
+          message={statusMessage.message}
+          onClose={() => setStatusMessage(null)}
+        />
+      )}
     </div>
   );
 }
