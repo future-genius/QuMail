@@ -1,8 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Shield, Key, Mail, Send, RefreshCw, Lock, Unlock, Clock, Database, LogOut, User } from 'lucide-react';
-import LoginForm, { EmailCredentials } from './components/LoginForm';
 import StatusMessage from './components/StatusMessage';
-import { useAuth } from './hooks/useAuth';
 
 // Types
 interface QKDKey {
@@ -27,6 +25,10 @@ interface EmailMessage {
   decrypted?: boolean;
 }
 
+interface LoginCredentials {
+  email: string;
+  password: string;
+}
 // Simulated QKD Key Manager
 class QKDKeyManager {
   private keys: Map<string, QKDKey> = new Map();
@@ -596,14 +598,6 @@ function App() {
         </div>
       </div>
 
-      {/* Status Messages */}
-      {statusMessage && (
-        <StatusMessage
-          type={statusMessage.type}
-          message={statusMessage.message}
-          onClose={() => setStatusMessage(null)}
-        />
-      )}
     </div>
   );
 }
