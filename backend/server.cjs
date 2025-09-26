@@ -1,4 +1,3 @@
-// QuMail QKD Key Manager - Quantum Key Distribution Service
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
@@ -18,7 +17,6 @@ let keyDatabase = {
 };
 
 // Middleware
-app.use(cors());
 app.use(cors({
     origin: ['http://localhost:3000', 'http://localhost:5173', 'https://qumail-quantum-secur-0rte.bolt.host'],
     credentials: true,
@@ -26,32 +24,6 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 app.use(express.json());
-
-// Quantum Key Generation (Simulated)
-function generateQuantumKey(length = 256) {
-    // In a real implementation, this would interface with actual quantum hardware
-    // For simulation, we use cryptographically secure random generation
-    const key = crypto.randomBytes(length / 8).toString('hex');
-    return key;
-}
-
-// BB84 Protocol Simulation
-function simulateBB84Protocol(alice_id, bob_id) {
-    const keyLength = 256; // bits
-    const rawKey = generateQuantumKey(keyLength);
-    
-    // Simulate quantum channel noise and eavesdropping detection
-    const errorRate = Math.random() * 0.05; // 0-5% error rate
-    const isSecure = errorRate < 0.11; // QBER threshold
-    
-    return {
-        rawKey,
-        errorRate,
-        isSecure,
-        protocol: 'BB84',
-        participants: [alice_id, bob_id]
-    };
-}
 
 // Database operations
 async function loadDatabase() {
@@ -73,8 +45,6 @@ async function saveDatabase() {
     }
 }
 
-// API Routes
-
 // Health check
 app.get('/health', (req, res) => {
     res.json({ 
@@ -84,238 +54,214 @@ app.get('/health', (req, res) => {
     });
 });
 
-// Get service info
-app.get('/api/info', (req, res) => {
-    res.json({
-        service: 'QuMail QKD Key Manager',
-        version: '1.0.0',
-        protocol: 'BB84',
-        capabilities: ['key_generation', 'key_distribution', 'session_management'],
-        status: 'operational'
-    });
-});
-
-// Request quantum key pair
-app.post('/api/keys/request', async (req, res) => {
+// Request QKD key
+app.post('/request_key', async (req, res) => {
     try {
-        const { alice_id, bob_id, purpose = 'email_encryption' } = req.body;
+        const { sender, recipient, lifetime = 3600 } = req.body;
         
-        if (!alice_id || !bob_id) {
-            return res.status(400).json({ 
-                error: 'Both alice_id and bob_id are required' 
-            });
-        }
-
-        // Simulate BB84 protocol
-        const bb84Result = simulateBB84Protocol(alice_id, bob_id);
-        
-        if (!bb84Result.isSecure) {
+        if (!sender || !recipient) {
             return res.status(400).json({
-                error: 'Quantum channel compromised',
-                errorRate: bb84Result.errorRate,
-                message: 'Key exchange aborted due to high error rate'
+                error: 'sender and recipient are required'
             });
         }
 
-        // Generate session ID
-        const sessionId = crypto.randomUUID();
-        
-        // Create key pair
-        const keyPair = {
-            id: crypto.randomUUID(),
-            sessionId,
-            alice_id,
-            bob_id,
-            alice_key: bb84Result.rawKey,
-            bob_key: bb84Result.rawKey, // Same key for symmetric encryption
-            purpose,
-            protocol: 'BB84',
-            created_at: new Date().toISOString(),
-            expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24 hours
+        // Generate key
+        const keyId = 'qkd_' + crypto.randomBytes(16).toString('hex');
+        const keyB64 = crypto.randomBytes(32).toString('base64');
+        const createdAt = new Date().toISOString();
+        const expiresAt = new Date(Date.now() + lifetime * 1000).toISOString();
+
+        const keyData = {
+            key_id: keyId,
+            key_b64: keyB64,
+            sender,
+            recipient,
+            created_at: createdAt,
+            expires_at: expiresAt,
             status: 'active',
-            errorRate: bb84Result.errorRate,
-            usage_count: 0
+            algorithm: 'AES-256-GCM'
         };
 
-        // Store in database
-        keyDatabase.keys.push(keyPair);
-        keyDatabase.sessions.push({
-            sessionId,
-            participants: [alice_id, bob_id],
-            created_at: keyPair.created_at,
-            status: 'active'
-        });
-
+        keyDatabase.keys.push(keyData);
         await saveDatabase();
 
-        console.log(`🔑 New quantum key pair generated for ${alice_id} ↔ ${bob_id}`);
-        
+        console.log(`🔑 Generated key ${keyId} for ${sender} -> ${recipient}`);
+
         res.json({
-            success: true,
-            sessionId,
-            keyId: keyPair.id,
-            alice_key: keyPair.alice_key,
-            bob_key: keyPair.bob_key,
-            expires_at: keyPair.expires_at,
-            protocol: 'BB84',
-            errorRate: bb84Result.errorRate
+            status: 'success',
+            key_id: keyId,
+            key_b64: keyB64,
+            expires_at: expiresAt,
+            algorithm: 'AES-256-GCM'
         });
 
     } catch (error) {
-        console.error('❌ Key generation error:', error);
-        res.status(500).json({ error: 'Internal server error' });
+        console.error('❌ Error requesting key:', error);
+        res.status(500).json({ error: error.message });
     }
 });
 
-// Get key by session ID
-app.get('/api/keys/session/:sessionId', async (req, res) => {
+// Get key
+app.get('/get_key/:keyId', async (req, res) => {
     try {
-        const { sessionId } = req.params;
-        const { participant_id } = req.query;
-
-        const keyPair = keyDatabase.keys.find(k => k.sessionId === sessionId);
+        const keyData = keyDatabase.keys.find(k => k.key_id === req.params.keyId);
         
-        if (!keyPair) {
-            return res.status(404).json({ error: 'Session not found' });
+        if (!keyData) {
+            return res.status(404).json({ error: 'Key not found' });
         }
-
-        // Check if key has expired
-        if (new Date() > new Date(keyPair.expires_at)) {
+        
+        if (new Date() > new Date(keyData.expires_at)) {
+            keyData.status = 'expired';
             return res.status(410).json({ error: 'Key has expired' });
         }
+        
+        res.json({
+            status: 'success',
+            key_data: keyData
+        });
 
-        // Verify participant
-        if (participant_id && ![keyPair.alice_id, keyPair.bob_id].includes(participant_id)) {
-            return res.status(403).json({ error: 'Unauthorized participant' });
+    } catch (error) {
+        console.error('❌ Error retrieving key:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Login endpoint
+app.post('/login', async (req, res) => {
+    try {
+        const { email, app_password } = req.body;
+        
+        if (!email || !app_password) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Email and app password are required'
+            });
         }
+        
+        // Validate email format
+        const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailPattern.test(email)) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Invalid email format'
+            });
+        }
+        
+        // Validate app password format
+        if (app_password.length !== 16 || /\s/.test(app_password)) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'App password must be exactly 16 characters with no spaces'
+            });
+        }
+        
+        // Simulate successful authentication
+        const sessionId = crypto.randomBytes(32).toString('hex');
+        
+        console.log(`✅ Simulated login for ${email}`);
+        
+        res.json({
+            status: 'success',
+            session_id: sessionId,
+            message: 'Login successful (simulated)',
+            email
+        });
 
-        // Increment usage count
-        keyPair.usage_count++;
+    } catch (error) {
+        console.error('❌ Login error:', error);
+        res.status(500).json({
+            status: 'error',
+            message: `Login failed: ${error.message}`
+        });
+    }
+});
+
+// Send email endpoint
+app.post('/send_email', async (req, res) => {
+    try {
+        const { to, subject, body, session_id } = req.body;
+        
+        if (!to || !subject || !body || !session_id) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Missing required fields'
+            });
+        }
+        
+        // Generate QKD key for this email
+        const keyId = 'qkd_' + crypto.randomBytes(16).toString('hex');
+        const keyB64 = crypto.randomBytes(32).toString('base64');
+        
+        const keyData = {
+            key_id: keyId,
+            key_b64: keyB64,
+            sender: 'user@example.com',
+            recipient: to,
+            created_at: new Date().toISOString(),
+            expires_at: new Date(Date.now() + 3600000).toISOString(),
+            status: 'active',
+            algorithm: 'AES-256-GCM'
+        };
+
+        keyDatabase.keys.push(keyData);
         await saveDatabase();
 
-        // Return appropriate key based on participant
-        const responseKey = participant_id === keyPair.alice_id ? 
-            keyPair.alice_key : keyPair.bob_key;
-
-        res.json({
-            sessionId: keyPair.sessionId,
-            key: responseKey,
-            expires_at: keyPair.expires_at,
-            usage_count: keyPair.usage_count,
-            protocol: keyPair.protocol
-        });
-
-    } catch (error) {
-        console.error('❌ Key retrieval error:', error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-});
-
-// List active sessions for a participant
-app.get('/api/sessions/:participantId', async (req, res) => {
-    try {
-        const { participantId } = req.params;
+        console.log(`📧 Simulated email send to ${to} with key ${keyId}`);
         
-        const activeSessions = keyDatabase.keys
-            .filter(k => 
-                (k.alice_id === participantId || k.bob_id === participantId) &&
-                k.status === 'active' &&
-                new Date() < new Date(k.expires_at)
-            )
-            .map(k => ({
-                sessionId: k.sessionId,
-                partner: k.alice_id === participantId ? k.bob_id : k.alice_id,
-                created_at: k.created_at,
-                expires_at: k.expires_at,
-                usage_count: k.usage_count,
-                purpose: k.purpose
-            }));
-
         res.json({
-            participant: participantId,
-            active_sessions: activeSessions,
-            count: activeSessions.length
+            status: 'success',
+            message: 'Email sent successfully with quantum encryption! (simulated)',
+            key_id: keyId
         });
 
     } catch (error) {
-        console.error('❌ Session listing error:', error);
-        res.status(500).json({ error: 'Internal server error' });
+        console.error('❌ Error sending email:', error);
+        res.status(500).json({
+            status: 'error',
+            message: `Unexpected error: ${error.message}`
+        });
     }
 });
 
-// Revoke a key/session
-app.delete('/api/keys/session/:sessionId', async (req, res) => {
+// List keys
+app.get('/keys', async (req, res) => {
     try {
-        const { sessionId } = req.params;
-        const { participant_id } = req.body;
-
-        const keyIndex = keyDatabase.keys.findIndex(k => k.sessionId === sessionId);
+        const keys = keyDatabase.keys.slice(-50).map(key => ({
+            key_id: key.key_id,
+            sender: key.sender,
+            recipient: key.recipient,
+            created_at: key.created_at,
+            expires_at: key.expires_at,
+            status: key.status,
+            algorithm: key.algorithm
+        }));
         
-        if (keyIndex === -1) {
-            return res.status(404).json({ error: 'Session not found' });
-        }
-
-        const keyPair = keyDatabase.keys[keyIndex];
-
-        // Verify participant can revoke
-        if (participant_id && ![keyPair.alice_id, keyPair.bob_id].includes(participant_id)) {
-            return res.status(403).json({ error: 'Unauthorized to revoke this session' });
-        }
-
-        // Mark as revoked
-        keyPair.status = 'revoked';
-        keyPair.revoked_at = new Date().toISOString();
-
-        await saveDatabase();
-
-        console.log(`🔒 Key session ${sessionId} revoked`);
-
         res.json({
-            success: true,
-            message: 'Session revoked successfully',
-            sessionId
+            status: 'success',
+            keys,
+            count: keys.length
         });
 
     } catch (error) {
-        console.error('❌ Key revocation error:', error);
-        res.status(500).json({ error: 'Internal server error' });
+        console.error('❌ Error listing keys:', error);
+        res.status(500).json({ error: error.message });
     }
 });
 
-// Get system statistics
-app.get('/api/stats', (req, res) => {
-    const now = new Date();
-    const activeKeys = keyDatabase.keys.filter(k => 
-        k.status === 'active' && new Date(k.expires_at) > now
-    );
-    
-    const expiredKeys = keyDatabase.keys.filter(k => 
-        new Date(k.expires_at) <= now
-    );
-
-    const revokedKeys = keyDatabase.keys.filter(k => 
-        k.status === 'revoked'
-    );
-
-    res.json({
-        total_keys: keyDatabase.keys.length,
-        active_keys: activeKeys.length,
-        expired_keys: expiredKeys.length,
-        revoked_keys: revokedKeys.length,
-        total_sessions: keyDatabase.sessions.length,
-        uptime: process.uptime()
-    });
-});
-
-// Initialize database and start server
+// Initialize and start server
 async function startServer() {
-    await loadDatabase();
-    
-    app.listen(PORT, '0.0.0.0', () => {
-        console.log(`✅ QuMail QKD Key Manager is running on http://localhost:${PORT}`);
-        console.log(`🔑 Quantum Key Distribution Service Active`);
-        console.log(`🌐 CORS enabled for frontend connections`);
-    });
+    try {
+        await loadDatabase();
+        
+        app.listen(PORT, '0.0.0.0', () => {
+            console.log(`✅ QuMail QKD Key Manager is running on http://localhost:${PORT}`);
+            console.log(`🔑 Quantum Key Distribution Service Active`);
+            console.log(`🌐 CORS enabled for frontend connections`);
+        });
+    } catch (error) {
+        console.error('❌ Failed to start server:', error);
+        process.exit(1);
+    }
 }
 
-startServer().catch(console.error);
+startServer();
