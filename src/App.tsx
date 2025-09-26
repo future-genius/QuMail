@@ -162,10 +162,19 @@ function App() {
       
       // Test if backend is reachable first
       try {
+        console.log('🔍 Testing backend connectivity...');
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+        
         const healthResponse = await fetch(`${API_BASE}/health`, {
           method: 'GET',
-          timeout: 5000
+          signal: controller.signal,
+          headers: {
+            'Content-Type': 'application/json',
+          }
         });
+        
+        clearTimeout(timeoutId);
         
         if (!healthResponse.ok) {
           throw new Error('Backend health check failed');
@@ -174,7 +183,15 @@ function App() {
         console.log('✅ Backend is reachable');
       } catch (healthError) {
         console.error('❌ Backend unreachable:', healthError);
-        showNotification('error', 'Cannot connect to QuMail backend. Please ensure the Flask server is running on port 5001.');
+        
+        let errorMessage = 'Cannot connect to QuMail backend. ';
+        if (healthError.name === 'AbortError') {
+          errorMessage += 'Connection timeout - backend may be starting up.';
+        } else {
+          errorMessage += 'Please ensure the backend server is running on port 5001.';
+        }
+        
+        showNotification('error', errorMessage);
         setLoggingIn(false);
         return;
       }
