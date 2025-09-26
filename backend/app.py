@@ -293,20 +293,33 @@ def login():
     try:
         data = request.get_json()
         email = data.get('email')
-        password = data.get('password')
+        app_password = data.get('app_password')
         
-        if not email or not password:
-            return jsonify({'error': 'Email and password are required'}), 400
+        if not email or not app_password:
+            return jsonify({
+                'status': 'error',
+                'message': 'Email and app password are required'
+            }), 400
         
         # Test Gmail SMTP connection
         try:
+            print(f"🔍 Testing SMTP connection for {email}")
             with smtplib.SMTP('smtp.gmail.com', 587) as server:
                 server.starttls()
-                server.login(email, password)
+                server.login(email, app_password)
+            print("✅ SMTP connection successful")
         except smtplib.SMTPAuthenticationError:
-            return jsonify({'error': 'Invalid Gmail credentials'}), 401
+            print("❌ SMTP authentication failed")
+            return jsonify({
+                'status': 'error',
+                'message': 'Invalid Gmail credentials. Please check your email and app password.'
+            }), 401
         except Exception as e:
-            return jsonify({'error': f'SMTP connection failed: {str(e)}'}), 500
+            print(f"❌ SMTP connection error: {e}")
+            return jsonify({
+                'status': 'error',
+                'message': f'SMTP connection failed: {str(e)}'
+            }), 500
         
         # Create session
         session_id = secrets.token_hex(32)
@@ -317,20 +330,25 @@ def login():
         # Store session in memory (in production, use secure storage)
         user_sessions[session_id] = {
             'email': email,
-            'password': password,
+            'password': app_password,
             'created_at': created_at,
             'expires_at': expires_at
         }
         
+        print(f"✅ Session created for {email}")
         return jsonify({
             'status': 'success',
             'session_id': session_id,
-            'message': 'Login successful'
+            'message': 'Login successful',
+            'email': email
         })
         
     except Exception as e:
         print(f"❌ Login error: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({
+            'status': 'error',
+            'message': f'Login failed: {str(e)}'
+        }), 500
 
 @app.route('/send_email', methods=['POST'])
 def send_email():
@@ -343,27 +361,40 @@ def send_email():
         session_id = data.get('session_id')
         
         if not all([to_address, subject, body, session_id]):
-            return jsonify({'error': 'Missing required fields'}), 400
+            return jsonify({
+                'status': 'error',
+                'message': 'Missing required fields'
+            }), 400
         
         # Get session credentials
         session = user_sessions.get(session_id)
         if not session:
-            return jsonify({'error': 'Invalid session'}), 401
+            return jsonify({
+                'status': 'error',
+                'message': 'Invalid session. Please log in again.'
+            }), 401
         
         # Check session expiration
         expires_at = datetime.datetime.fromisoformat(
             session['expires_at'].replace('Z', '+00:00')
         )
         if datetime.datetime.utcnow().replace(tzinfo=expires_at.tzinfo) > expires_at:
-            return jsonify({'error': 'Session expired'}), 401
+            return jsonify({
+                'status': 'error',
+                'message': 'Session expired. Please log in again.'
+            }), 401
+        
+        print(f"📧 Sending email from {session['email']} to {to_address}")
         
         # Request QKD key
         qkd_key = key_manager.request_key(session['email'], to_address, 3600)
+        print(f"🔑 QKD key generated: {qkd_key['key_id']}")
         
         # Encrypt message with AES-256-GCM
         key = base64.b64decode(qkd_key['key_b64'])
         cipher = AES.new(key, AES.MODE_GCM)
         ciphertext, tag = cipher.encrypt_and_digest(body.encode('utf-8'))
+        print("🔐 Message encrypted with AES-256-GCM")
         
         # Create encrypted payload
         encrypted_payload = {
@@ -405,31 +436,41 @@ QuMail - Quantum-Secure Email Communication"""
         
         msg.attach(MIMEText(email_body, 'plain'))
         
+        print("📤 Connecting to Gmail SMTP...")
         # Send email via Gmail SMTP
         with smtplib.SMTP('smtp.gmail.com', 587) as server:
             server.starttls()
+            print("🔒 STARTTLS enabled")
             server.login(session['email'], session['password'])
+            print("✅ SMTP login successful")
             server.send_message(msg)
+            print("📧 Email sent successfully")
         
-        print(f"✅ Email sent successfully to {to_address}")
-        print(f"🔑 Key ID: {qkd_key['key_id']}")
+        print(f"🎉 Email delivered to {to_address} with key {qkd_key['key_id']}")
         
         return jsonify({
             'status': 'success',
-            'message': 'Email sent successfully',
+            'message': 'Email sent successfully with quantum encryption!',
             'key_id': qkd_key['key_id']
         })
         
     except smtplib.SMTPAuthenticationError:
+        print("❌ SMTP authentication failed")
         return jsonify({
             'status': 'error',
-            'message': 'Gmail authentication failed'
+            'message': 'Gmail authentication failed. Please check your credentials.'
         }), 401
+    except smtplib.SMTPException as e:
+        print(f"❌ SMTP error: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Email sending failed: {str(e)}'
+        }), 500
     except Exception as e:
         print(f"❌ Error sending email: {e}")
         return jsonify({
             'status': 'error',
-            'message': f'Failed to send email: {str(e)}'
+            'message': f'Unexpected error: {str(e)}'
         }), 500
 
 @app.route('/validate_smtp', methods=['POST'])

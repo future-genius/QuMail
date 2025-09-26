@@ -27,6 +27,7 @@ interface EmailMessage {
 interface UserSession {
   email: string;
   loggedIn: boolean;
+  sessionId?: string;
 }
 
 // Simulated QKD Key Manager
@@ -142,6 +143,7 @@ function App() {
     setLoggingIn(true);
     
     try {
+      console.log('🔍 Attempting login...');
       const response = await fetch(`${API_BASE}/login`, {
         method: 'POST',
         headers: {
@@ -154,9 +156,14 @@ function App() {
       });
 
       const result = await response.json();
+      console.log('📡 Login response:', result);
       
       if (result.status === 'success') {
-        setUserSession({ email: loginForm.email, loggedIn: true });
+        setUserSession({ 
+          email: loginForm.email, 
+          loggedIn: true,
+          sessionId: result.session_id
+        });
         setCurrentView('compose');
         showNotification('success', 'Login successful!');
         setLoginForm({ email: '', appPassword: '' });
@@ -165,6 +172,7 @@ function App() {
       }
       
     } catch (error) {
+      console.error('❌ Login error:', error);
       showNotification('error', 'Failed to connect to server');
     } finally {
       setLoggingIn(false);
@@ -217,9 +225,14 @@ function App() {
       return;
     }
 
+    if (!userSession.sessionId) {
+      showNotification('error', 'Please log in first');
+      return;
+    }
     setSending(true);
     
     try {
+      console.log('📧 Sending email...');
       // Send real email via Flask backend
       const response = await fetch(`${API_BASE}/send_email`, {
         method: 'POST',
@@ -230,11 +243,12 @@ function App() {
           to: composeForm.to,
           subject: composeForm.subject,
           body: composeForm.body,
-          sender: userSession.email
+          session_id: userSession.sessionId
         })
       });
 
       const result = await response.json();
+      console.log('📡 Send response:', result);
       
       if (result.status === 'success') {
         // Create local email record for UI
@@ -259,6 +273,7 @@ function App() {
       }
       
     } catch (error) {
+      console.error('❌ Send error:', error);
       showNotification('error', 'Failed to connect to server');
     } finally {
       setSending(false);
@@ -410,6 +425,7 @@ function App() {
                     <li>2. Go to Google Account → Security → 2-Step Verification</li>
                     <li>3. Generate an App Password for QuMail</li>
                     <li>4. Use the 16-character password above</li>
+                    <li>5. Make sure IMAP is enabled in Gmail settings</li>
                   </ol>
                 </div>
 
