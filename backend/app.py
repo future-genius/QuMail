@@ -669,6 +669,23 @@ if __name__ == '__main__':
     # Initialize database
     init_database()
     
+    # Verify all dependencies are installed
+    try:
+        import flask
+        import flask_cors
+        import Crypto
+        import requests
+        import dotenv
+        print(f"✅ Dependencies verified:")
+        print(f"   Flask: {flask.__version__}")
+        print(f"   Requests: {requests.__version__}")
+        print(f"   PyCryptodome: {Crypto.__version__}")
+        print(f"   Python-dotenv: {dotenv.__version__}")
+    except ImportError as e:
+        print(f"❌ Missing dependency: {e}")
+        print("Please run: python -m pip install --upgrade flask flask-cors pycryptodome requests python-dotenv")
+        exit(1)
+    
     # Run Flask server
     print("🔐 QuMail QKD Key Manager starting...")
     print(f"🚀 Running on http://localhost:{API_PORT}")
