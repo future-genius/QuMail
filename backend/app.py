@@ -18,6 +18,7 @@ from flask_cors import CORS
 import smtplib
 import imaplib
 import email
+import socket
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
 import sqlite3
@@ -294,6 +295,10 @@ def login():
         data = request.get_json()
         email = data.get('email')
         app_password = data.get('app_password')
+        smtp_host = data.get('smtp_host', 'smtp.gmail.com')
+        smtp_port = data.get('smtp_port', 587)
+        imap_host = data.get('imap_host', 'imap.gmail.com')
+        imap_port = data.get('imap_port', 993)
         
         if not email or not app_password:
             return jsonify({
@@ -301,24 +306,67 @@ def login():
                 'message': 'Email and app password are required'
             }), 400
         
+        # Validate email format
+        import re
+        email_pattern = r'^[^\s@]+@[^\s@]+\.[^\s@]+$'
+        if not re.match(email_pattern, email):
+            return jsonify({
+                'status': 'error',
+                'message': 'Invalid email format'
+            }), 400
+        
+        # Validate app password format
+        if len(app_password) != 16 or ' ' in app_password:
+            return jsonify({
+                'status': 'error',
+                'message': 'App password must be exactly 16 characters with no spaces'
+            }), 400
+        
         # Test Gmail SMTP connection
         try:
-            print(f"🔍 Testing SMTP connection for {email}")
-            with smtplib.SMTP('smtp.gmail.com', 587) as server:
+            print(f"🔍 Testing SMTP connection for {email} on {smtp_host}:{smtp_port}")
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
                 server.starttls()
+                print("🔒 STARTTLS enabled")
                 server.login(email, app_password)
-            print("✅ SMTP connection successful")
+                print("✅ SMTP authentication successful")
+            
+            # Test Gmail IMAP connection
+            print(f"🔍 Testing IMAP connection for {email} on {imap_host}:{imap_port}")
+            with imaplib.IMAP4_SSL(imap_host, imap_port, timeout=10) as imap:
+                imap.login(email, app_password)
+                imap.select('INBOX')
+                print("✅ IMAP authentication successful")
+                
         except smtplib.SMTPAuthenticationError:
-            print("❌ SMTP authentication failed")
+            print(f"❌ SMTP authentication failed for {email}")
             return jsonify({
                 'status': 'error',
-                'message': 'Invalid Gmail credentials. Please check your email and app password.'
+                'message': 'Gmail authentication failed. Please verify: 1) Email address is correct, 2) App password is correct (16 characters), 3) 2FA is enabled, 4) IMAP is enabled in Gmail settings'
             }), 401
-        except Exception as e:
-            print(f"❌ SMTP connection error: {e}")
+        except imaplib.IMAP4.error as e:
+            print(f"❌ IMAP authentication failed for {email}: {e}")
             return jsonify({
                 'status': 'error',
-                'message': f'SMTP connection failed: {str(e)}'
+                'message': 'IMAP authentication failed. Please ensure IMAP is enabled in your Gmail settings.'
+            }), 401
+        except socket.timeout:
+            print(f"❌ Connection timeout for {email}")
+            return jsonify({
+                'status': 'error',
+                'message': 'Connection timeout. Please check your internet connection and firewall settings.'
+            }), 408
+        except socket.gaierror as e:
+            print(f"❌ DNS resolution failed: {e}")
+            return jsonify({
+                'status': 'error',
+                'message': 'Cannot resolve Gmail servers. Please check your internet connection.'
+            }), 503
+        except Exception as e:
+            print(f"❌ Connection error for {email}: {e}")
+            return jsonify({
+                'status': 'error',
+                'message': f'Connection failed: {str(e)}. Please check your network connection and Gmail settings.'
             }), 500
         
         # Create session

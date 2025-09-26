@@ -100,7 +100,7 @@ function simulateDecryption(ciphertext: string, key: string): string {
 }
 
 // API Configuration
-const API_BASE = 'http://localhost:5001';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5001';
 
 function App() {
   const [currentView, setCurrentView] = useState<'login' | 'compose' | 'inbox' | 'keys'>('login');
@@ -140,10 +140,45 @@ function App() {
       return;
     }
 
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(loginForm.email)) {
+      showNotification('error', 'Please enter a valid email address');
+      return;
+    }
+
+    // Validate app password format (16 characters, no spaces)
+    if (loginForm.appPassword.length !== 16 || /\s/.test(loginForm.appPassword)) {
+      showNotification('error', 'App password must be exactly 16 characters with no spaces');
+      return;
+    }
     setLoggingIn(true);
     
     try {
       console.log('🔍 Attempting login...');
+      console.log('📧 Email:', loginForm.email);
+      console.log('🔑 App Password Length:', loginForm.appPassword.length);
+      console.log('🌐 API Base:', API_BASE);
+      
+      // Test if backend is reachable first
+      try {
+        const healthResponse = await fetch(`${API_BASE}/health`, {
+          method: 'GET',
+          timeout: 5000
+        });
+        
+        if (!healthResponse.ok) {
+          throw new Error('Backend health check failed');
+        }
+        
+        console.log('✅ Backend is reachable');
+      } catch (healthError) {
+        console.error('❌ Backend unreachable:', healthError);
+        showNotification('error', 'Cannot connect to QuMail backend. Please ensure the Flask server is running on port 5001.');
+        setLoggingIn(false);
+        return;
+      }
+      
       const response = await fetch(`${API_BASE}/login`, {
         method: 'POST',
         headers: {
@@ -151,7 +186,11 @@ function App() {
         },
         body: JSON.stringify({
           email: loginForm.email,
-          app_password: loginForm.appPassword
+          app_password: loginForm.appPassword,
+          smtp_host: 'smtp.gmail.com',
+          smtp_port: 587,
+          imap_host: 'imap.gmail.com',
+          imap_port: 993
         })
       });
 
@@ -168,12 +207,29 @@ function App() {
         showNotification('success', 'Login successful!');
         setLoginForm({ email: '', appPassword: '' });
       } else {
-        showNotification('error', result.message || 'Login failed');
+        const errorMessage = result.message || 'Login failed';
+        console.error('❌ Login failed:', errorMessage);
+        
+        // Provide specific error messages for common issues
+        if (errorMessage.includes('authentication') || errorMessage.includes('credentials')) {
+          showNotification('error', 'Gmail authentication failed. Please verify your email and app password are correct.');
+        } else if (errorMessage.includes('SMTP') || errorMessage.includes('connection')) {
+          showNotification('error', 'Cannot connect to Gmail servers. Check your internet connection and firewall settings.');
+        } else {
+          showNotification('error', errorMessage);
+        }
       }
       
     } catch (error) {
       console.error('❌ Login error:', error);
-      showNotification('error', 'Failed to connect to server');
+      
+      if (error.name === 'TypeError' && error.message.includes('fetch')) {
+        showNotification('error', 'Network error: Cannot reach QuMail backend. Please check if the Flask server is running.');
+      } else if (error.name === 'AbortError') {
+        showNotification('error', 'Connection timeout: Gmail servers may be unreachable.');
+      } else {
+        showNotification('error', `Connection failed: ${error.message}`);
+      }
     } finally {
       setLoggingIn(false);
     }
@@ -426,6 +482,7 @@ function App() {
                     <li>3. Generate an App Password for QuMail</li>
                     <li>4. Use the 16-character password above</li>
                     <li>5. Make sure IMAP is enabled in Gmail settings</li>
+                    <li>6. Ensure Flask backend is running on port 5001</li>
                   </ol>
                 </div>
 
@@ -673,15 +730,15 @@ function App() {
           <div className="flex items-center justify-between text-sm">
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2 text-emerald-400">
-                <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></div>
-                <span>{userSession.loggedIn ? 'QKD System Online' : 'Not Connected'}</span>
+                <div className={`w-2 h-2 rounded-full ${userSession.loggedIn ? 'bg-emerald-400 animate-pulse' : 'bg-red-400'}`}></div>
+                <span>{userSession.loggedIn ? 'Gmail Connected' : 'Not Connected'}</span>
               </div>
               <div className="text-slate-400">
                 Keys Active: {qkdKeys.filter(k => k.status === 'active').length}
               </div>
               {userSession.loggedIn && (
                 <div className="text-slate-400">
-                  Gmail: Connected
+                  QKD: Online
                 </div>
               )}
             </div>
