@@ -295,3 +295,27 @@ app.get('/api/stats', (req, res) => {
 
     const revokedKeys = keyDatabase.keys.filter(k => 
         k.status === 'revoked'
+    );
+
+    res.json({
+        total_keys: keyDatabase.keys.length,
+        active_keys: activeKeys.length,
+        expired_keys: expiredKeys.length,
+        revoked_keys: revokedKeys.length,
+        total_sessions: keyDatabase.sessions.length,
+        uptime: process.uptime()
+    });
+});
+
+// Initialize database and start server
+async function startServer() {
+    await loadDatabase();
+    
+    app.listen(PORT, '0.0.0.0', () => {
+        console.log(`✅ QuMail QKD Key Manager is running on http://localhost:${PORT}`);
+        console.log(`🔑 Quantum Key Distribution Service Active`);
+        console.log(`🌐 CORS enabled for frontend connections`);
+    });
+}
+
+startServer().catch(console.error);
