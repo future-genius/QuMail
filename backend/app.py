@@ -24,6 +24,18 @@ import datetime
 import json
 import os
 from pathlib import Path
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+
+@app.route('/api/login', methods=['POST'])
+def api_login():
+    data = request.json
+    email = data.get("email")
+    password = data.get("password")
+
+    # TODO: implement Gmail login or quantum key auth here
+    return jsonify({"status": "success", "message": f"Logged in as {email}"})
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for frontend communication
