@@ -87,6 +87,24 @@ function simulateEncryption(plaintext: string, key: string): string {
   const encoded = btoa(plaintext + '::' + key.substr(0, 8));
   return `ENCRYPTED:${encoded}`;
 }
+// Safe fetch wrapper to avoid HTML/invalid JSON errors
+async function safeFetch(url: string, options: RequestInit) {
+  try {
+    const response = await fetch(url, options);
+    const text = await response.text();
+
+    // Attempt to parse JSON safely
+    try {
+      return JSON.parse(text);
+    } catch {
+      console.error('Expected JSON but got:', text);
+      throw new Error('Invalid JSON response from backend');
+    }
+  } catch (err) {
+    console.error('Network or backend error:', err);
+    throw err;
+  }
+}
 
 function simulateDecryption(ciphertext: string, key: string): string {
   if (!ciphertext.startsWith('ENCRYPTED:')) {
