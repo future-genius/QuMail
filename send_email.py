@@ -149,7 +149,6 @@ Encrypted at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC
 --- END ENCRYPTED PAYLOAD ---
 
 QuMail - Quantum-Secure Email Communication
-https://github.com/qumail/qumail
 """
         
         msg.attach(MIMEText(email_body, 'plain'))
