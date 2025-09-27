@@ -261,7 +261,7 @@ app.get('/keys', async (req, res) => {
 });
 
 // Login endpoint (simulated)
-app.post('/api/login', async (req, res) => {
+app.post('/login', async (req, res) => {
     try {
         const { email, app_password } = req.body;
         
