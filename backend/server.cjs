@@ -42,6 +42,7 @@ async function loadDatabase() {
         console.log('📊 Creating new database...');
         keyDatabase = { keys: [], sessions: [], usage_log: [] };
         await saveDatabase();
+      
     }
 }
 
