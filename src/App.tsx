@@ -100,7 +100,7 @@ function simulateDecryption(ciphertext: string, key: string): string {
 }
 
 // API Configuration
-const API_BASE = 'http://localhost:5001';
+const API_BASE = import.meta.env.DEV ? 'http://localhost:5001' : '/api';
 
 function App() {
   const [currentView, setCurrentView] = useState<'login' | 'compose' | 'inbox' | 'keys'>('login');
@@ -188,7 +188,7 @@ function App() {
         if (healthError.name === 'AbortError') {
           errorMessage += 'Connection timeout - backend may be starting up.';
         } else {
-          errorMessage += 'Please ensure the backend server is running on port 5001.';
+          errorMessage += 'Please ensure the Node.js backend server is running on port 5001.';
         }
         
         showNotification('error', errorMessage);
@@ -203,11 +203,7 @@ function App() {
         },
         body: JSON.stringify({
           email: loginForm.email,
-          app_password: loginForm.appPassword,
-          smtp_host: 'smtp.gmail.com',
-          smtp_port: 587,
-          imap_host: 'imap.gmail.com',
-          imap_port: 993
+          app_password: loginForm.appPassword
         })
       });
 
@@ -245,7 +241,7 @@ function App() {
       } else if (error.name === 'AbortError') {
         showNotification('error', 'Connection timeout: Gmail servers may be unreachable.');
       } else {
-        showNotification('error', `Connection failed: ${error.message}`);
+        showNotification('error', `Connection failed: ${error.message}. Make sure the Node.js backend is running.`);
       }
     } finally {
       setLoggingIn(false);
@@ -499,7 +495,7 @@ function App() {
                     <li>3. Generate an App Password for QuMail</li>
                     <li>4. Use the 16-character password above</li>
                     <li>5. Make sure IMAP is enabled in Gmail settings</li>
-                    <li>6. Ensure Flask backend is running on port 5001</li>
+                    <li>6. Ensure Node.js backend is running on port 5001</li>
                   </ol>
                 </div>
 
