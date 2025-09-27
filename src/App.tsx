@@ -196,7 +196,7 @@ function App() {
         return;
       }
       
-      const response = await fetch(`${API_BASE}/login`, {
+      const result = await safeFetch(`${API_BASE}/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -207,8 +207,8 @@ function App() {
         })
       });
 
-      const result = await response.json();
       console.log('📡 Login response:', result);
+
       
       if (result.status === 'success') {
         setUserSession({ 
