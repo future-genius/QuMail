@@ -100,7 +100,7 @@ function simulateDecryption(ciphertext: string, key: string): string {
 }
 
 // API Configuration
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5001';
+const API_BASE = 'http://localhost:5001';
 
 function App() {
   const [currentView, setCurrentView] = useState<'login' | 'compose' | 'inbox' | 'keys'>('login');
