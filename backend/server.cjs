@@ -31,9 +31,16 @@ async function loadDatabase() {
     try {
         const data = await fs.readFile(DB_FILE, 'utf8');
         keyDatabase = JSON.parse(data);
+
+        // Ensure keys, sessions, and usage_log exist
+        keyDatabase.keys = keyDatabase.keys || [];
+        keyDatabase.sessions = keyDatabase.sessions || [];
+        keyDatabase.usage_log = keyDatabase.usage_log || [];
+
         console.log('📊 Database loaded successfully');
     } catch (error) {
         console.log('📊 Creating new database...');
+        keyDatabase = { keys: [], sessions: [], usage_log: [] };
         await saveDatabase();
     }
 }
