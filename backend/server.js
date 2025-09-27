@@ -1,50 +1,55 @@
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
-const fs = require('fs');
+const fs = require('fs').promises;
 const path = require('path');
 
 const app = express();
-app.use(cors());
+const PORT = 5001;
+
+// Database file path
+const DB_FILE = path.join(__dirname, 'qkd_keys.json');
+
+// In-memory database
+let keyDatabase = {
+    keys: [],
+    sessions: [],
+    usage_log: []
+};
+
+// Middleware
+app.use(cors({
+    origin: ['http://localhost:3000', 'http://localhost:5173', 'https://qumail-quantum-secur-0rte.bolt.host'],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 
-const PORT = 5001;
-const DATABASE_FILE = path.join(__dirname, 'qkd_keys.json');
-
-// In-memory storage for sessions and keys
-let qkdKeys = {};
-let userSessions = {};
-let keyUsageLog = [];
-
-// Load existing data
-function loadDatabase() {
+// Database operations
+async function loadDatabase() {
     try {
-        if (fs.existsSync(DATABASE_FILE)) {
-            const data = JSON.parse(fs.readFileSync(DATABASE_FILE, 'utf8'));
-            qkdKeys = data.qkdKeys || {};
-            keyUsageLog = data.keyUsageLog || [];
-        }
+        const data = await fs.readFile(DB_FILE, 'utf8');
+        keyDatabase = JSON.parse(data);
+        console.log('📊 Database loaded successfully');
     } catch (error) {
-        console.log('Creating new database...');
+        console.log('📊 Creating new database...');
+        await saveDatabase();
     }
 }
 
-// Save data
-function saveDatabase() {
+async function saveDatabase() {
     try {
-        fs.writeFileSync(DATABASE_FILE, JSON.stringify({
-            qkdKeys,
-            keyUsageLog
-        }, null, 2));
+        await fs.writeFile(DB_FILE, JSON.stringify(keyDatabase, null, 2));
     } catch (error) {
-        console.error('Failed to save database:', error);
+        console.error('❌ Failed to save database:', error);
     }
 }
 
-// QKD Key Manager
+// QKD Key Manager Class
 class QKDKeyManager {
     generateKeyId() {
-        return `qkd_${crypto.randomBytes(16).toString('hex')}`;
+        return 'qkd_' + crypto.randomBytes(16).toString('hex');
     }
 
     generateQuantumKey(length = 32) {
@@ -71,9 +76,9 @@ class QKDKeyManager {
             key_length: 256
         };
         
-        qkdKeys[keyId] = keyData;
+        keyDatabase.keys.push(keyData);
         
-        keyUsageLog.push({
+        keyDatabase.usage_log.push({
             key_id: keyId,
             action: 'KEY_GENERATED',
             timestamp: createdAt,
@@ -87,7 +92,7 @@ class QKDKeyManager {
     }
 
     getKey(keyId) {
-        const keyData = qkdKeys[keyId];
+        const keyData = keyDatabase.keys.find(k => k.key_id === keyId);
         if (!keyData) {
             return null;
         }
@@ -96,12 +101,15 @@ class QKDKeyManager {
         const expiresAt = new Date(keyData.expires_at);
         if (new Date() > expiresAt) {
             keyData.status = 'expired';
-            qkdKeys[keyId] = keyData;
-            saveDatabase();
+            const keyIndex = keyDatabase.keys.findIndex(k => k.key_id === keyId);
+            if (keyIndex !== -1) {
+                keyDatabase.keys[keyIndex] = keyData;
+                saveDatabase();
+            }
         }
         
         // Log access
-        keyUsageLog.push({
+        keyDatabase.usage_log.push({
             key_id: keyId,
             action: 'KEY_ACCESSED',
             timestamp: new Date().toISOString(),
@@ -113,14 +121,70 @@ class QKDKeyManager {
         
         return keyData;
     }
+
+    getAllKeys() {
+        return keyDatabase.keys.slice(-50).map(key => ({
+            key_id: key.key_id,
+            sender: key.sender,
+            recipient: key.recipient,
+            created_at: key.created_at,
+            expires_at: key.expires_at,
+            status: key.status,
+            algorithm: key.algorithm
+        }));
+    }
 }
 
 const keyManager = new QKDKeyManager();
 
+// AES-256-GCM Encryption/Decryption utilities
+function encryptMessage(plaintext, keyB64) {
+    try {
+        const key = Buffer.from(keyB64, 'base64');
+        const cipher = crypto.createCipher('aes-256-gcm', key);
+        const nonce = crypto.randomBytes(12);
+        
+        cipher.setAAD(Buffer.from('QuMail-v1.0'));
+        let ciphertext = cipher.update(plaintext, 'utf8');
+        ciphertext = Buffer.concat([ciphertext, cipher.final()]);
+        const tag = cipher.getAuthTag();
+        
+        return {
+            ciphertext: ciphertext.toString('base64'),
+            nonce: nonce.toString('base64'),
+            tag: tag.toString('base64')
+        };
+    } catch (error) {
+        throw new Error(`Encryption failed: ${error.message}`);
+    }
+}
+
+function decryptMessage(ciphertextB64, nonceB64, tagB64, keyB64) {
+    try {
+        const key = Buffer.from(keyB64, 'base64');
+        const ciphertext = Buffer.from(ciphertextB64, 'base64');
+        const nonce = Buffer.from(nonceB64, 'base64');
+        const tag = Buffer.from(tagB64, 'base64');
+        
+        const decipher = crypto.createDecipher('aes-256-gcm', key);
+        decipher.setAuthTag(tag);
+        decipher.setAAD(Buffer.from('QuMail-v1.0'));
+        
+        let plaintext = decipher.update(ciphertext, null, 'utf8');
+        plaintext += decipher.final('utf8');
+        
+        return plaintext;
+    } catch (error) {
+        throw new Error(`Decryption failed: ${error.message}`);
+    }
+}
+
 // API Routes
+
+// Health check
 app.get('/health', (req, res) => {
-    res.json({
-        status: 'healthy',
+    res.json({ 
+        status: 'healthy', 
         service: 'QuMail QKD Key Manager',
         version: '1.0.0',
         port: PORT,
@@ -128,7 +192,8 @@ app.get('/health', (req, res) => {
     });
 });
 
-app.post('/request_key', (req, res) => {
+// Request QKD key
+app.post('/request_key', async (req, res) => {
     try {
         const { sender, recipient, lifetime = 3600 } = req.body;
         
@@ -137,9 +202,9 @@ app.post('/request_key', (req, res) => {
                 error: 'sender and recipient are required'
             });
         }
-        
+
         const keyData = keyManager.requestKey(sender, recipient, lifetime);
-        
+
         res.json({
             status: 'success',
             key_id: keyData.key_id,
@@ -147,13 +212,15 @@ app.post('/request_key', (req, res) => {
             expires_at: keyData.expires_at,
             algorithm: keyData.algorithm
         });
+
     } catch (error) {
         console.error('❌ Error requesting key:', error);
         res.status(500).json({ error: error.message });
     }
 });
 
-app.get('/get_key/:keyId', (req, res) => {
+// Get key
+app.get('/get_key/:keyId', async (req, res) => {
     try {
         const keyData = keyManager.getKey(req.params.keyId);
         
@@ -169,39 +236,32 @@ app.get('/get_key/:keyId', (req, res) => {
             status: 'success',
             key_data: keyData
         });
+
     } catch (error) {
         console.error('❌ Error retrieving key:', error);
         res.status(500).json({ error: error.message });
     }
 });
 
-app.get('/keys', (req, res) => {
+// List keys
+app.get('/keys', async (req, res) => {
     try {
-        const keys = Object.values(qkdKeys)
-            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-            .slice(0, 50)
-            .map(key => ({
-                key_id: key.key_id,
-                sender: key.sender,
-                recipient: key.recipient,
-                created_at: key.created_at,
-                expires_at: key.expires_at,
-                status: key.status,
-                algorithm: key.algorithm
-            }));
+        const keys = keyManager.getAllKeys();
         
         res.json({
             status: 'success',
             keys,
             count: keys.length
         });
+
     } catch (error) {
         console.error('❌ Error listing keys:', error);
         res.status(500).json({ error: error.message });
     }
 });
 
-app.post('/login', (req, res) => {
+// Login endpoint (simulated)
+app.post('/login', async (req, res) => {
     try {
         const { email, app_password } = req.body;
         
@@ -222,28 +282,29 @@ app.post('/login', (req, res) => {
         }
         
         // Validate app password format
-        if (app_password.length !== 16 || app_password.includes(' ')) {
+        if (app_password.length !== 16 || /\s/.test(app_password)) {
             return res.status(400).json({
                 status: 'error',
                 message: 'App password must be exactly 16 characters with no spaces'
             });
         }
         
-        // For demo purposes, we'll simulate successful authentication
-        // In a real implementation, you would test SMTP/IMAP connections here
-        console.log(`✅ Simulated login for ${email}`);
-        
-        // Create session
+        // Simulate successful authentication
         const sessionId = crypto.randomBytes(32).toString('hex');
         const createdAt = new Date().toISOString();
         const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
         
-        userSessions[sessionId] = {
+        keyDatabase.sessions.push({
+            session_id: sessionId,
             email,
             password: app_password,
             created_at: createdAt,
             expires_at: expiresAt
-        };
+        });
+        
+        await saveDatabase();
+        
+        console.log(`✅ Simulated login for ${email}`);
         
         res.json({
             status: 'success',
@@ -251,6 +312,7 @@ app.post('/login', (req, res) => {
             message: 'Login successful (simulated)',
             email
         });
+
     } catch (error) {
         console.error('❌ Login error:', error);
         res.status(500).json({
@@ -260,7 +322,8 @@ app.post('/login', (req, res) => {
     }
 });
 
-app.post('/send_email', (req, res) => {
+// Send email endpoint (simulated)
+app.post('/send_email', async (req, res) => {
     try {
         const { to, subject, body, session_id } = req.body;
         
@@ -271,7 +334,8 @@ app.post('/send_email', (req, res) => {
             });
         }
         
-        const session = userSessions[session_id];
+        // Find session
+        const session = keyDatabase.sessions.find(s => s.session_id === session_id);
         if (!session) {
             return res.status(401).json({
                 status: 'error',
@@ -290,21 +354,23 @@ app.post('/send_email', (req, res) => {
         
         console.log(`📧 Simulating email send from ${session.email} to ${to}`);
         
-        // Request QKD key
+        // Generate QKD key for this email
         const qkdKey = keyManager.requestKey(session.email, to, 3600);
         console.log(`🔑 QKD key generated: ${qkdKey.key_id}`);
         
-        // Simulate encryption (in real implementation, you would encrypt with AES-256-GCM)
+        // Simulate encryption
+        const encrypted = encryptMessage(body, qkdKey.key_b64);
+        
         const encryptedPayload = {
             version: '1.0',
             algorithm: 'AES-256-GCM',
             key_id: qkdKey.key_id,
-            ciphertext: Buffer.from(body).toString('base64'), // Simulated encryption
-            nonce: crypto.randomBytes(12).toString('base64'),
-            tag: crypto.randomBytes(16).toString('base64'),
+            ciphertext: encrypted.ciphertext,
+            nonce: encrypted.nonce,
+            tag: encrypted.tag,
             timestamp: new Date().toISOString()
         };
-        
+
         console.log(`🎉 Simulated email delivery to ${to} with key ${qkdKey.key_id}`);
         
         res.json({
@@ -312,6 +378,7 @@ app.post('/send_email', (req, res) => {
             message: 'Email sent successfully with quantum encryption! (simulated)',
             key_id: qkdKey.key_id
         });
+
     } catch (error) {
         console.error('❌ Error sending email:', error);
         res.status(500).json({
@@ -321,11 +388,92 @@ app.post('/send_email', (req, res) => {
     }
 });
 
-// Initialize and start server
-loadDatabase();
-
-app.listen(PORT, () => {
-    console.log('🔐 QuMail QKD Key Manager starting...');
-    console.log(`🚀 Running on http://localhost:${PORT}`);
-    console.log('📡 Ready to issue quantum-secure keys');
+// Decrypt message endpoint
+app.post('/decrypt_message', async (req, res) => {
+    try {
+        const { key_id, ciphertext, nonce, tag } = req.body;
+        
+        if (!key_id || !ciphertext || !nonce || !tag) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Missing required decryption parameters'
+            });
+        }
+        
+        // Get key
+        const keyData = keyManager.getKey(key_id);
+        if (!keyData) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'Decryption key not found'
+            });
+        }
+        
+        if (keyData.status === 'expired') {
+            return res.status(410).json({
+                status: 'error',
+                message: 'Decryption key has expired'
+            });
+        }
+        
+        // Decrypt message
+        const plaintext = decryptMessage(ciphertext, nonce, tag, keyData.key_b64);
+        
+        res.json({
+            status: 'success',
+            plaintext,
+            key_id
+        });
+        
+    } catch (error) {
+        console.error('❌ Error decrypting message:', error);
+        res.status(500).json({
+            status: 'error',
+            message: `Decryption failed: ${error.message}`
+        });
+    }
 });
+
+// Statistics endpoint
+app.get('/stats', async (req, res) => {
+    try {
+        const totalKeys = keyDatabase.keys.length;
+        const activeKeys = keyDatabase.keys.filter(k => k.status === 'active').length;
+        const expiredKeys = keyDatabase.keys.filter(k => k.status === 'expired').length;
+        const totalSessions = keyDatabase.sessions.length;
+        
+        res.json({
+            status: 'success',
+            stats: {
+                total_keys: totalKeys,
+                active_keys: activeKeys,
+                expired_keys: expiredKeys,
+                total_sessions: totalSessions,
+                uptime: process.uptime()
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Error getting stats:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Initialize and start server
+async function startServer() {
+    try {
+        await loadDatabase();
+        
+        app.listen(PORT, '0.0.0.0', () => {
+            console.log('🔐 QuMail QKD Key Manager starting...');
+            console.log(`🚀 Running on http://localhost:${PORT}`);
+            console.log('📡 Ready to issue quantum-secure keys');
+            console.log(`🌐 CORS enabled for frontend connections`);
+        });
+    } catch (error) {
+        console.error('❌ Failed to start server:', error);
+        process.exit(1);
+    }
+}
+
+startServer();
