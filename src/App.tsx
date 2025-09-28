@@ -71,7 +71,36 @@ function App() {
   };
 
   // API calls
-  const apiCall = async (endpoint: string, options: RequestInit = {}) => {
+const apiCall = async (endpoint: string, options: RequestInit = {}) => {
+  try {
+    const response = await fetch(`${API_BASE}${endpoint}`, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...options.headers,
+      },
+      ...options,
+    });
+
+    // Check if response has JSON
+    const text = await response.text();
+    let data;
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      throw new Error('Invalid JSON response from server');
+    }
+
+    if (!response.ok) {
+      throw new Error(data.message || `Request failed with status ${response.status}`);
+    }
+
+    return data;
+  } catch (error: any) {
+    console.error('API Error:', error);
+    throw error;
+  }
+};
+const apiCall = async (endpoint: string, options: RequestInit = {}) => {
     try {
       const response = await fetch(`${API_BASE}${endpoint}`, {
         headers: {
