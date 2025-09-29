@@ -182,6 +182,17 @@ app.get('/health', (req, res) => {
         status: 'healthy',
         service: 'QuMail Backend',
         version: '1.0.0',
+        console.log('📡 Available endpoints:');
+        console.log('  POST /api/login');
+        console.log('  POST /api/logout');
+        console.log('  POST /api/request-qkd-key');
+        console.log('  GET  /api/get-qkd-key/:key_id');
+        console.log('  POST /api/send-email');
+        console.log('  GET  /api/emails');
+        console.log('  POST /api/decrypt-email');
+        console.log('  GET  /api/keys');
+        console.log('  GET  /api/stats');
+        console.log('  GET  /health');
         port: PORT,
         timestamp: new Date().toISOString()
     });
@@ -284,7 +295,7 @@ app.post('/api/send-email', async (req, res) => {
         }
         
         // Generate QKD key
-        const qkdKey = keyManager.requestKey(session.email, to, 3600);
+        const qkdKey = keyManager.requestKey(session.email, to, 24 * 3600); // 24 hours
         
         // Encrypt message
         const encrypted = encryptMessage(body, qkdKey.key_b64);
@@ -472,6 +483,87 @@ app.get('/api/keys', async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Failed to get keys'
+        });
+    }
+});
+
+// Request QKD key endpoint
+app.post('/api/request-qkd-key', async (req, res) => {
+    try {
+        const { sender, recipient, session_id } = req.body;
+        
+        if (!sender || !recipient || !session_id) {
+            return res.status(400).json({
+                success: false,
+                message: 'Missing required fields: sender, recipient, session_id'
+            });
+        }
+        
+        // Verify session
+        const session = database.sessions.find(s => s.id === session_id);
+        if (!session) {
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid session'
+            });
+        }
+        
+        // Generate QKD key
+        const qkdKey = keyManager.requestKey(sender, recipient, 3600);
+        
+        console.log(`🔑 QKD key generated: ${qkdKey.key_id} for ${sender} -> ${recipient}`);
+        
+        res.json({
+            success: true,
+            key_id: qkdKey.key_id,
+            key_b64: qkdKey.key_b64,
+            expires_at: qkdKey.expires_at,
+            message: 'QKD key generated successfully'
+        });
+        
+    } catch (error) {
+        console.error('❌ Request QKD key error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to generate QKD key'
+        });
+    }
+});
+
+// Get QKD key by ID endpoint
+app.get('/api/get-qkd-key/:key_id', async (req, res) => {
+    try {
+        const { key_id } = req.params;
+        
+        if (!key_id) {
+            return res.status(400).json({
+                success: false,
+                message: 'Key ID required'
+            });
+        }
+        
+        const keyData = keyManager.getKey(key_id);
+        
+        if (!keyData) {
+            return res.status(404).json({
+                success: false,
+                message: 'Key not found'
+            });
+        }
+        
+        res.json({
+            success: true,
+            key_id: keyData.key_id,
+            key_b64: keyData.key_b64,
+            status: keyData.status,
+            expires_at: keyData.expires_at
+        });
+        
+    } catch (error) {
+        console.error('❌ Get QKD key error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to get QKD key'
         });
     }
 });

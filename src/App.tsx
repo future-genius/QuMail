@@ -209,7 +209,8 @@ function App() {
       loadKeys(); // Refresh keys to show the newly generated key
       
     } catch (error) {
-      showNotification('error', `Failed to send encrypted email: ${error.message}`);
+      console.error('Send email error:', error);
+      showNotification('error', `Failed to send encrypted email: ${error.message || 'Unknown error'}`);
     } finally {
       setLoading(false);
     }
