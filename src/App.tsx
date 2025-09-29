@@ -42,6 +42,7 @@ function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [notification, setNotification] = useState<Notification | null>(null);
   const [loading, setLoading] = useState(false);
+  const [backendStatus, setBackendStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking');
   
   // Login form
   const [loginForm, setLoginForm] = useState({
@@ -65,12 +66,24 @@ function App() {
   // Check backend health
   const checkBackendHealth = async () => {
     try {
-      const response = await fetch('http://localhost:5001/health');
-      const data = await response.json();
-      console.log('✅ Backend health check:', data);
-      return true;
+      const response = await fetch('http://localhost:5001/health', {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log('✅ Backend health check:', data);
+        setBackendStatus('connected');
+        return true;
+      } else {
+        throw new Error(`HTTP ${response.status}`);
+      }
     } catch (error) {
       console.error('❌ Backend health check failed:', error);
+      setBackendStatus('disconnected');
       return false;
     }
   };
@@ -112,7 +125,7 @@ function App() {
     } catch (error) {
       console.error(`❌ API Error:`, error);
       if (error instanceof TypeError && error.message.includes('fetch')) {
-        throw new Error('Cannot connect to QuMail backend. Please ensure the Python Flask server is running on port 5001.');
+        throw new Error('Network error: Cannot reach QuMail backend. Please ensure the Python Flask server (backend/app.py) is running on port 5001.');
       }
       throw error;
     }
@@ -309,6 +322,12 @@ function App() {
       }
     }
   }, [currentView, session]);
+
+  // Periodic health check
+  useEffect(() => {
+    const interval = setInterval(checkBackendHealth, 30000); // Check every 30 seconds
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-800">
@@ -665,9 +684,18 @@ function App() {
         <div className="max-w-7xl mx-auto px-6 py-3">
           <div className="flex items-center justify-between text-sm">
             <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2 text-emerald-400">
-                <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
-                <span>Backend Connected</span>
+              <div className={`flex items-center gap-2 ${
+                backendStatus === 'connected' ? 'text-emerald-400' : 
+                backendStatus === 'disconnected' ? 'text-red-400' : 'text-yellow-400'
+              }`}>
+                <div className={`w-2 h-2 rounded-full ${
+                  backendStatus === 'connected' ? 'bg-emerald-400 animate-pulse' : 
+                  backendStatus === 'disconnected' ? 'bg-red-400' : 'bg-yellow-400 animate-pulse'
+                }`}></div>
+                <span>
+                  {backendStatus === 'connected' ? 'Backend Connected' : 
+                   backendStatus === 'disconnected' ? 'Backend Disconnected' : 'Checking Backend...'}
+                </span>
               </div>
               {session && (
                 <div className="text-slate-400">

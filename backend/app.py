@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-QuMail Backend - Clean Flask Server with QKD Key Manager
+QuMail Backend - Flask Server with QKD Key Manager
 """
 
 import os
@@ -541,28 +541,28 @@ def get_user_keys():
         logger.error(f"❌ Get keys failed: {e}")
         return jsonify({'success': False, 'message': 'Failed to get keys'}), 500
 
+@app.route('/', methods=['GET'])
+def root():
+    """Root endpoint"""
+    return jsonify({
+        'service': 'QuMail Backend',
+        'status': 'running',
+        'version': '1.0.0',
+        'endpoints': [
+            'GET /health',
+            'POST /api/login',
+            'POST /api/logout', 
+            'POST /api/request-qkd-key',
+            'POST /api/send-email',
+            'GET /api/emails',
+            'POST /api/decrypt-email',
+            'GET /api/keys'
+        ]
+    })
+
 if __name__ == '__main__':
     # Initialize database
     init_db()
-    
-    # Root route
-    @app.route('/', methods=['GET'])
-    def root():
-        return jsonify({
-            'service': 'QuMail Backend',
-            'status': 'running',
-            'version': '1.0.0',
-            'endpoints': [
-                'GET /health',
-                'POST /api/login',
-                'POST /api/logout', 
-                'POST /api/request-qkd-key',
-                'POST /api/send-email',
-                'GET /api/emails',
-                'POST /api/decrypt-email',
-                'GET /api/keys'
-            ]
-        })
     
     print("🔐 QuMail Backend Server")
     print("🚀 Starting on http://localhost:5001")
