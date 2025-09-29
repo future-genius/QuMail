@@ -185,9 +185,10 @@ function App() {
       });
 
       setComposeForm({ to: '', subject: '', body: '' });
-      showNotification('success', 'Email sent with quantum encryption!');
+      showNotification('success', 'Email sent with quantum encryption! New QKD key generated.');
       setCurrentView('inbox');
       loadEmails();
+      loadKeys(); // Refresh keys to show the newly generated key
       
     } catch (error) {
       showNotification('error', error.message || 'Failed to send email');
@@ -617,7 +618,7 @@ function App() {
               </div>
               {session && (
                 <div className="text-slate-400">
-                  Keys Active: {keys.filter(k => k.status === 'active').length}
+                  Keys Active: {keys.filter(k => k.status === 'available').length}
                 </div>
               )}
             </div>

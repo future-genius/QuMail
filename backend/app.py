@@ -143,7 +143,7 @@ class QKDKeyManager:
             
             db.commit()
             
-            logger.info(f"Generated key {key_id} for {sender} -> {recipient}")
+            logger.info(f"🔑 Generated quantum key {key_id} for {sender} -> {recipient} ({key_length_bits} bits)")
             
             return {
                 'key_id': key_id,
@@ -399,11 +399,8 @@ def send_email():
         if not session:
             return jsonify({'success': False, 'message': 'Invalid session'}), 401
         
-        # Request quantum key
-        requester_id = f"qumail:user:{session['email']}"
-        message_size_bits = len(body.encode('utf-8')) * 8 + 2048  # Add padding
-        
-        key_data = key_manager.request_key(requester_id, message_size_bits, 'message_aes')
+        # Generate quantum key automatically for this email
+        key_data = key_manager.request_key(session['email'], to_email, 2048, 'message_aes', 24)
         
         # Encrypt message
         encrypted = encrypt_message(body, key_data['key_block_b64'])
@@ -420,7 +417,7 @@ def send_email():
               json.dumps(encrypted), key_data['key_id'], created_at))
         db.commit()
         
-        logger.info(f"Email sent from {session['email']} to {to_email}")
+        logger.info(f"Email sent from {session['email']} to {to_email} with quantum key {key_data['key_id']}")
         
         return jsonify({
             'success': True,
@@ -532,7 +529,27 @@ def get_user_keys():
         if not session:
             return jsonify({'success': False, 'message': 'Invalid session'}), 401
         
-        # Get keys for this user
+        # Get keys for this user (both sent and received)
+        keys = db.execute('''
+            SELECT key_id, sender, recipient,
+                   created_at, expires_at, status, usage as algorithm
+            FROM qkd_keys 
+            WHERE sender = ? OR recipient = ?
+            ORDER BY created_at DESC
+            LIMIT 50
+        ''', (session['email'], session['email'])).fetchall()
+        
+        # Update expired keys
+        current_time = datetime.utcnow().isoformat() + 'Z'
+        for key in keys:
+            if key['status'] == 'available':
+                expires_at = datetime.fromisoformat(key['expires_at'].replace('Z', '+00:00'))
+                if datetime.utcnow().replace(tzinfo=expires_at.tzinfo) > expires_at:
+                    db.execute('UPDATE qkd_keys SET status = ? WHERE key_id = ?', ('expired', key['key_id']))
+        
+        db.commit()
+        
+        # Refresh the query to get updated statuses
         keys = db.execute('''
             SELECT key_id, sender, recipient,
                    created_at, expires_at, status, usage as algorithm
