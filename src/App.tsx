@@ -72,7 +72,7 @@ function App() {
 
   // API calls
   const apiCall = async (endpoint: string, options: RequestInit = {}) => {
-    const url = `${API_BASE}${endpoint}`;
+    const url = `http://localhost:5001${endpoint}`;
     
     const defaultHeaders = {
       'Content-Type': 'application/json',
@@ -91,13 +91,13 @@ function App() {
       
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `HTTP ${response.status}: ${response.statusText}`);
+        throw new Error(errorData.message || `HTTP ${response.status}: ${response.statusText} - URL: ${url}`);
       }
       
       return await response.json();
     } catch (error) {
       if (error instanceof TypeError && error.message.includes('fetch')) {
-        throw new Error('Network error: Cannot reach QuMail backend. Please check if the Flask server is running on port 5001.');
+        throw new Error('Network error: Cannot reach QuMail backend. Please ensure the Python Flask server (backend/app.py) is running on port 5001.');
       }
       throw error;
     }
@@ -112,7 +112,7 @@ function App() {
 
     setLoading(true);
     try {
-      const result = await apiCall('/login', {
+      const result = await apiCall('/api/login', {
         method: 'POST',
         body: JSON.stringify({
           email: loginForm.email,
@@ -140,7 +140,7 @@ function App() {
   const handleLogout = async () => {
     try {
       if (session) {
-        await apiCall('/logout', {
+        await apiCall('/api/logout', {
           method: 'POST',
           body: JSON.stringify({ session_id: session.id })
         });
@@ -175,7 +175,7 @@ function App() {
     setLoading(true);
     try {
       // First, request a QKD key for encryption
-      const qkdKeyResponse = await apiCall('/request-qkd-key', {
+      const qkdKeyResponse = await apiCall('/api/request-qkd-key', {
         method: 'POST',
         body: JSON.stringify({
           sender: session.user.email,
@@ -191,7 +191,7 @@ function App() {
       showNotification('success', `QKD key generated: ${qkdKeyResponse.key_id}`);
 
       // Now send the email with the generated key
-      await apiCall('/send-email', {
+      await apiCall('/api/send-email', {
         method: 'POST',
         body: JSON.stringify({
           to: composeForm.to,
@@ -221,7 +221,7 @@ function App() {
     if (!session) return;
 
     try {
-      const result = await apiCall(`/emails?session_id=${session.id}`);
+      const result = await apiCall(`/api/emails?session_id=${session.id}`);
       setEmails(result.emails);
     } catch (error) {
       showNotification('error', 'Failed to load emails');
@@ -233,7 +233,7 @@ function App() {
     if (!session) return;
 
     try {
-      const result = await apiCall(`/keys?session_id=${session.id}`);
+      const result = await apiCall(`/api/keys?session_id=${session.id}`);
       setKeys(result.keys);
     } catch (error) {
       showNotification('error', 'Failed to load keys');
@@ -245,7 +245,7 @@ function App() {
     if (!session) return;
 
     try {
-      const result = await apiCall('/decrypt-email', {
+      const result = await apiCall('/api/decrypt-email', {
         method: 'POST',
         body: JSON.stringify({
           email_id: emailId,
