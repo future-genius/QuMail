@@ -174,24 +174,42 @@ function App() {
 
     setLoading(true);
     try {
+      // First, request a QKD key for encryption
+      const qkdKeyResponse = await apiCall('/request-qkd-key', {
+        method: 'POST',
+        body: JSON.stringify({
+          sender: session.user.email,
+          recipient: composeForm.to,
+          session_id: session.id
+        })
+      });
+
+      if (!qkdKeyResponse.success) {
+        throw new Error(`QKD key request failed: ${qkdKeyResponse.message}`);
+      }
+
+      showNotification('success', `QKD key generated: ${qkdKeyResponse.key_id}`);
+
+      // Now send the email with the generated key
       await apiCall('/send-email', {
         method: 'POST',
         body: JSON.stringify({
           to: composeForm.to,
           subject: composeForm.subject,
           body: composeForm.body,
-          session_id: session.id
+          session_id: session.id,
+          key_id: qkdKeyResponse.key_id
         })
       });
 
       setComposeForm({ to: '', subject: '', body: '' });
-      showNotification('success', 'Email sent with quantum encryption! New QKD key generated.');
+      showNotification('success', 'Email sent with quantum encryption!');
       setCurrentView('inbox');
       loadEmails();
       loadKeys(); // Refresh keys to show the newly generated key
       
     } catch (error) {
-      showNotification('error', error.message || 'Failed to send email');
+      showNotification('error', `Failed to send encrypted email: ${error.message}`);
     } finally {
       setLoading(false);
     }

@@ -280,14 +280,16 @@ def request_key():
     try:
         data = request.get_json()
         
-        requester_id = data.get('requester_id')
+        sender = data.get('sender')
+        recipient = data.get('recipient')
         key_length_bits = data.get('key_length_bits', 2048)
         usage = data.get('usage', 'message_otp')
+        lifetime_hours = data.get('lifetime_hours', 24)
         
-        if not requester_id:
-            return jsonify({'error': 'requester_id is required'}), 400
+        if not sender or not recipient:
+            return jsonify({'error': 'sender and recipient are required'}), 400
         
-        key_data = key_manager.request_key(requester_id, key_length_bits, usage)
+        key_data = key_manager.request_key(sender, recipient, key_length_bits, usage, lifetime_hours)
         
         return jsonify(key_data), 200
         
@@ -320,6 +322,62 @@ def consume_key(key_id):
     except Exception as e:
         logger.error(f"Key consumption failed: {e}")
         return jsonify({'error': 'Key consumption failed'}), 500
+
+# QuMail specific QKD endpoints
+@app.route('/api/request-qkd-key', methods=['POST'])
+def request_qkd_key():
+    """Request QKD key for email encryption"""
+    try:
+        data = request.get_json()
+        sender = data.get('sender')
+        recipient = data.get('recipient')
+        session_id = data.get('session_id')
+        
+        if not sender or not recipient or not session_id:
+            return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+        
+        # Verify session
+        db = get_db()
+        session = db.execute('SELECT * FROM sessions WHERE session_id = ?', (session_id,)).fetchone()
+        if not session:
+            return jsonify({'success': False, 'message': 'Invalid session'}), 401
+        
+        # Generate quantum key
+        key_data = key_manager.request_key(sender, recipient, 2048, 'message_aes', 24)
+        
+        logger.info(f"QKD key generated: {key_data['key_id']} for {sender} -> {recipient}")
+        
+        return jsonify({
+            'success': True,
+            'key_id': key_data['key_id'],
+            'key_b64': key_data['key_block_b64'],
+            'expires_at': key_data['expires_at']
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"QKD key request failed: {e}")
+        return jsonify({'success': False, 'message': 'QKD key request failed'}), 500
+
+@app.route('/api/get-qkd-key/<key_id>', methods=['GET'])
+def get_qkd_key(key_id):
+    """Get QKD key by ID"""
+    try:
+        key_data = key_manager.get_key(key_id)
+        
+        if not key_data:
+            return jsonify({'success': False, 'message': 'Key not found'}), 404
+        
+        return jsonify({
+            'success': True,
+            'key_id': key_data['key_id'],
+            'key_b64': key_data['key_block_b64'],
+            'status': key_data['status'],
+            'expires_at': key_data['expires_at']
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Get QKD key failed: {e}")
+        return jsonify({'success': False, 'message': 'Failed to get key'}), 500
 
 # QuMail application endpoints
 @app.route('/api/login', methods=['POST'])
@@ -389,6 +447,7 @@ def send_email():
         subject = data.get('subject')
         body = data.get('body')
         session_id = data.get('session_id')
+        key_id = data.get('key_id')  # Optional: use existing key
         
         if not all([to_email, subject, body, session_id]):
             return jsonify({'success': False, 'message': 'Missing required fields'}), 400
@@ -399,8 +458,14 @@ def send_email():
         if not session:
             return jsonify({'success': False, 'message': 'Invalid session'}), 401
         
-        # Generate quantum key automatically for this email
-        key_data = key_manager.request_key(session['email'], to_email, 2048, 'message_aes', 24)
+        # Use provided key or generate new one
+        if key_id:
+            key_data = key_manager.get_key(key_id)
+            if not key_data:
+                return jsonify({'success': False, 'message': 'Invalid key ID'}), 400
+        else:
+            # Generate quantum key automatically for this email
+            key_data = key_manager.request_key(session['email'], to_email, 2048, 'message_aes', 24)
         
         # Encrypt message
         encrypted = encrypt_message(body, key_data['key_block_b64'])
