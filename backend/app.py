@@ -540,6 +540,89 @@ if __name__ == '__main__':
     # Initialize database
     init_db()
     
+    # Add root route for status check
+    @app.route('/', methods=['GET'])
+    def root():
+        """Root endpoint - shows backend status"""
+        return '''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>QuMail Backend</title>
+            <style>
+                body { 
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                    background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+                    color: white;
+                    margin: 0;
+                    padding: 40px;
+                    min-height: 100vh;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }
+                .container {
+                    text-align: center;
+                    background: rgba(255,255,255,0.1);
+                    padding: 40px;
+                    border-radius: 16px;
+                    backdrop-filter: blur(10px);
+                    border: 1px solid rgba(255,255,255,0.2);
+                    max-width: 600px;
+                }
+                .status { color: #10b981; font-size: 24px; margin: 20px 0; }
+                .endpoint { 
+                    background: rgba(0,0,0,0.3); 
+                    padding: 8px 12px; 
+                    border-radius: 6px; 
+                    font-family: monospace; 
+                    margin: 5px 0;
+                    display: inline-block;
+                }
+                .section { margin: 30px 0; }
+                h1 { margin: 0 0 10px 0; }
+                h2 { color: #60a5fa; margin: 20px 0 10px 0; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🔐 QuMail Backend Server</h1>
+                <div class="status">✅ Running on port 5001</div>
+                
+                <div class="section">
+                    <h2>🚀 Status</h2>
+                    <p>Quantum-secure email backend is operational</p>
+                    <p>ETSI GS QKD-014 compatible API ready</p>
+                </div>
+                
+                <div class="section">
+                    <h2>📡 Available Endpoints</h2>
+                    <div class="endpoint">GET /health</div>
+                    <div class="endpoint">POST /api/login</div>
+                    <div class="endpoint">POST /api/send-email</div>
+                    <div class="endpoint">GET /api/emails</div>
+                    <div class="endpoint">POST /api/decrypt-email</div>
+                    <div class="endpoint">GET /api/keys</div>
+                    <div class="endpoint">POST /api/v1/keys/request</div>
+                    <div class="endpoint">GET /api/v1/keys/{key_id}</div>
+                </div>
+                
+                <div class="section">
+                    <h2>🔗 Quick Links</h2>
+                    <p><a href="/health" style="color: #60a5fa;">Health Check</a></p>
+                    <p><a href="http://localhost:5173" style="color: #60a5fa;">Frontend (if running)</a></p>
+                </div>
+                
+                <div class="section">
+                    <p style="color: #94a3b8; font-size: 14px;">
+                        QuMail v1.0.0 | Quantum-Secure Email Communication
+                    </p>
+                </div>
+            </div>
+        </body>
+        </html>
+        '''
+    
     print("🔐 QuMail QKD Backend Server")
     print("🚀 Starting on http://localhost:5001")
     print("📡 ETSI GS QKD-014 compatible API ready")
