@@ -533,15 +533,14 @@ def get_user_keys():
             return jsonify({'success': False, 'message': 'Invalid session'}), 401
         
         # Get keys for this user
-        requester_pattern = f"qumail:user:{session['email']}"
         keys = db.execute('''
-            SELECT key_id, requester_id as sender, requester_id as recipient,
+            SELECT key_id, sender, recipient,
                    created_at, expires_at, status, usage as algorithm
             FROM qkd_keys 
-            WHERE requester_id = ?
+            WHERE sender = ? OR recipient = ?
             ORDER BY created_at DESC
             LIMIT 50
-        ''', (requester_pattern,)).fetchall()
+        ''', (session['email'], session['email'])).fetchall()
         
         key_list = [dict(key) for key in keys]
         
