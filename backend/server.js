@@ -182,17 +182,6 @@ app.get('/health', (req, res) => {
         status: 'healthy',
         service: 'QuMail Backend',
         version: '1.0.0',
-        console.log('📡 Available endpoints:');
-        console.log('  POST /api/login');
-        console.log('  POST /api/logout');
-        console.log('  POST /api/request-qkd-key');
-        console.log('  GET  /api/get-qkd-key/:key_id');
-        console.log('  POST /api/send-email');
-        console.log('  GET  /api/emails');
-        console.log('  POST /api/decrypt-email');
-        console.log('  GET  /api/keys');
-        console.log('  GET  /api/stats');
-        console.log('  GET  /health');
         port: PORT,
         timestamp: new Date().toISOString()
     });
@@ -604,6 +593,17 @@ async function startServer() {
             console.log(`🚀 Running on http://localhost:${PORT}`);
             console.log('📡 Ready for quantum-secure communications');
             console.log('🌐 CORS enabled for frontend connections');
+            console.log('📡 Available endpoints:');
+            console.log('  POST /api/login');
+            console.log('  POST /api/logout');
+            console.log('  POST /api/request-qkd-key');
+            console.log('  GET  /api/get-qkd-key/:key_id');
+            console.log('  POST /api/send-email');
+            console.log('  GET  /api/emails');
+            console.log('  POST /api/decrypt-email');
+            console.log('  GET  /api/keys');
+            console.log('  GET  /api/stats');
+            console.log('  GET  /health');
         });
     } catch (error) {
         console.error('❌ Failed to start server:', error);
