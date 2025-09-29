@@ -9,12 +9,15 @@ import json
 import sqlite3
 import secrets
 import base64
+import hashlib
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization
 import logging
 
 # Configure logging
@@ -50,7 +53,8 @@ def init_db():
             CREATE TABLE IF NOT EXISTS qkd_keys (
                 key_id TEXT PRIMARY KEY,
                 key_block_b64 TEXT NOT NULL,
-                requester_id TEXT NOT NULL,
+                sender TEXT NOT NULL,
+                recipient TEXT NOT NULL,
                 key_length_bits INTEGER NOT NULL,
                 usage TEXT NOT NULL,
                 status TEXT DEFAULT 'available',
@@ -59,11 +63,23 @@ def init_db():
                 consumed_at TEXT NULL
             );
             
+            CREATE TABLE IF NOT EXISTS users (
+                user_id TEXT PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                public_key TEXT,
+                private_key_encrypted TEXT,
+                created_at TEXT NOT NULL,
+                last_login TEXT
+            );
+            
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
                 email TEXT NOT NULL,
                 created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL
+                expires_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users (user_id)
             );
             
             CREATE TABLE IF NOT EXISTS emails (
@@ -101,7 +117,7 @@ class QKDKeyManager:
         length_bytes = (length_bits + 7) // 8  # Round up to nearest byte
         return secrets.token_bytes(length_bytes)
     
-    def request_key(self, requester_id, key_length_bits, usage="message_otp", lifetime_hours=1):
+    def request_key(self, sender, recipient, key_length_bits=2048, usage="message_aes", lifetime_hours=1):
         """Request new quantum key block"""
         try:
             key_id = self.generate_key_id()
@@ -114,25 +130,27 @@ class QKDKeyManager:
             db = get_db()
             db.execute('''
                 INSERT INTO qkd_keys 
-                (key_id, key_block_b64, requester_id, key_length_bits, usage, created_at, expires_at)
+                (key_id, key_block_b64, sender, recipient, key_length_bits, usage, created_at, expires_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (key_id, key_block_b64, requester_id, key_length_bits, usage, created_at, expires_at))
+            ''', (key_id, key_block_b64, sender, recipient, key_length_bits, usage, created_at, expires_at))
             
             # Log key generation
             db.execute('''
                 INSERT INTO usage_log (log_id, key_id, action, timestamp, details)
                 VALUES (?, ?, ?, ?, ?)
             ''', (secrets.token_hex(8), key_id, 'KEY_GENERATED', created_at, 
-                  f'Generated for {requester_id}, {key_length_bits} bits'))
+                  f'Generated for {sender} -> {recipient}, {key_length_bits} bits'))
             
             db.commit()
             
-            logger.info(f"Generated key {key_id} for {requester_id}")
+            logger.info(f"Generated key {key_id} for {sender} -> {recipient}")
             
             return {
                 'key_id': key_id,
                 'status': 'available',
                 'key_block_b64': key_block_b64,
+                'sender': sender,
+                'recipient': recipient,
                 'created_at': created_at,
                 'expires_at': expires_at,
                 'key_length_bits': key_length_bits,
