@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Shield, Mail, Key, User, LogOut, Send, RefreshCw, Lock, Unlock, Clock, Eye, EyeOff } from 'lucide-react';
+import { Shield, Mail, Key, User, LogOut, Send, RefreshCw, Lock, Clock, Eye, EyeOff } from 'lucide-react';
 
 // Types
 interface User {
@@ -36,8 +36,6 @@ interface Notification {
   type: 'success' | 'error' | 'info';
   message: string;
 }
-
-const API_BASE = '/api';
 
 function App() {
   const [currentView, setCurrentView] = useState<'login' | 'compose' | 'inbox' | 'keys'>('login');
@@ -87,17 +85,21 @@ function App() {
     };
     
     try {
+      console.log(`🌐 API Call: ${config.method || 'GET'} ${url}`);
       const response = await fetch(url, config);
       
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `HTTP ${response.status}: ${response.statusText} - URL: ${url}`);
+        throw new Error(errorData.message || `HTTP ${response.status}: ${response.statusText}`);
       }
       
-      return await response.json();
+      const data = await response.json();
+      console.log(`✅ API Response:`, data);
+      return data;
     } catch (error) {
+      console.error(`❌ API Error:`, error);
       if (error instanceof TypeError && error.message.includes('fetch')) {
-        throw new Error('Network error: Cannot reach QuMail backend. Please ensure the Python Flask server (backend/app.py) is running on port 5001.');
+        throw new Error('Cannot connect to QuMail backend. Please ensure the Python Flask server is running on port 5001.');
       }
       throw error;
     }
@@ -120,14 +122,18 @@ function App() {
         })
       });
 
-      setSession({
-        id: result.session_id,
-        user: result.user
-      });
-      
-      setCurrentView('compose');
-      showNotification('success', 'Login successful!');
-      setLoginForm({ email: '', password: '', showPassword: false });
+      if (result.success) {
+        setSession({
+          id: result.session_id,
+          user: result.user
+        });
+        
+        setCurrentView('compose');
+        showNotification('success', 'Login successful!');
+        setLoginForm({ email: '', password: '', showPassword: false });
+      } else {
+        showNotification('error', result.message || 'Login failed');
+      }
       
     } catch (error) {
       showNotification('error', error.message || 'Login failed');
@@ -191,7 +197,7 @@ function App() {
       showNotification('success', `QKD key generated: ${qkdKeyResponse.key_id}`);
 
       // Now send the email with the generated key
-      await apiCall('/api/send-email', {
+      const emailResponse = await apiCall('/api/send-email', {
         method: 'POST',
         body: JSON.stringify({
           to: composeForm.to,
@@ -202,11 +208,15 @@ function App() {
         })
       });
 
-      setComposeForm({ to: '', subject: '', body: '' });
-      showNotification('success', 'Email sent with quantum encryption!');
-      setCurrentView('inbox');
-      loadEmails();
-      loadKeys(); // Refresh keys to show the newly generated key
+      if (emailResponse.success) {
+        setComposeForm({ to: '', subject: '', body: '' });
+        showNotification('success', 'Email sent with quantum encryption!');
+        setCurrentView('inbox');
+        loadEmails();
+        loadKeys();
+      } else {
+        throw new Error(emailResponse.message || 'Failed to send email');
+      }
       
     } catch (error) {
       console.error('Send email error:', error);
@@ -222,7 +232,9 @@ function App() {
 
     try {
       const result = await apiCall(`/api/emails?session_id=${session.id}`);
-      setEmails(result.emails);
+      if (result.success) {
+        setEmails(result.emails);
+      }
     } catch (error) {
       showNotification('error', 'Failed to load emails');
     }
@@ -234,7 +246,9 @@ function App() {
 
     try {
       const result = await apiCall(`/api/keys?session_id=${session.id}`);
-      setKeys(result.keys);
+      if (result.success) {
+        setKeys(result.keys);
+      }
     } catch (error) {
       showNotification('error', 'Failed to load keys');
     }
@@ -253,12 +267,16 @@ function App() {
         })
       });
 
-      setDecryptedBodies(prev => ({
-        ...prev,
-        [emailId]: result.decrypted_body
-      }));
-      
-      showNotification('success', 'Email decrypted successfully!');
+      if (result.success) {
+        setDecryptedBodies(prev => ({
+          ...prev,
+          [emailId]: result.decrypted_body
+        }));
+        
+        showNotification('success', 'Email decrypted successfully!');
+      } else {
+        throw new Error(result.message || 'Failed to decrypt email');
+      }
       
     } catch (error) {
       showNotification('error', error.message || 'Failed to decrypt email');
@@ -637,7 +655,7 @@ function App() {
               </div>
               {session && (
                 <div className="text-slate-400">
-                  Keys Active: {keys.filter(k => k.status === 'available').length}
+                  Keys Active: {keys.filter(k => k.status === 'active').length}
                 </div>
               )}
             </div>
