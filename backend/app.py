@@ -324,40 +324,6 @@ def consume_key(key_id):
         return jsonify({'error': 'Key consumption failed'}), 500
 
 # QuMail specific QKD endpoints
-@app.route('/api/request-qkd-key', methods=['POST'])
-def request_qkd_key():
-    """Request QKD key for email encryption"""
-    try:
-        data = request.get_json()
-        sender = data.get('sender')
-        recipient = data.get('recipient')
-        session_id = data.get('session_id')
-        
-        if not sender or not recipient or not session_id:
-            return jsonify({'success': False, 'message': 'Missing required fields'}), 400
-        
-        # Verify session
-        db = get_db()
-        session = db.execute('SELECT * FROM sessions WHERE session_id = ?', (session_id,)).fetchone()
-        if not session:
-            return jsonify({'success': False, 'message': 'Invalid session'}), 401
-        
-        # Generate quantum key
-        key_data = key_manager.request_key(sender, recipient, 2048, 'message_aes', 24)
-        
-        logger.info(f"QKD key generated: {key_data['key_id']} for {sender} -> {recipient}")
-        
-        return jsonify({
-            'success': True,
-            'key_id': key_data['key_id'],
-            'key_b64': key_data['key_block_b64'],
-            'expires_at': key_data['expires_at']
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"QKD key request failed: {e}")
-        return jsonify({'success': False, 'message': 'QKD key request failed'}), 500
-
 @app.route('/api/get-qkd-key/<key_id>', methods=['GET'])
 def get_qkd_key(key_id):
     """Get QKD key by ID"""
@@ -382,6 +348,60 @@ def get_qkd_key(key_id):
 # QuMail application endpoints
 @app.route('/api/login', methods=['POST'])
 def login():
+
+@app.route('/api/request-qkd-key', methods=['POST', 'OPTIONS'])
+def request_qkd_key_endpoint():
+    """Request QKD key for email encryption - handles CORS preflight"""
+    if request.method == 'OPTIONS':
+        # Handle CORS preflight request
+        response = jsonify({'status': 'preflight'})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+        return response
+    
+    try:
+        data = request.get_json()
+        sender = data.get('sender')
+        recipient = data.get('recipient')
+        session_id = data.get('session_id')
+        
+        if not sender or not recipient or not session_id:
+            return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+        
+        # Verify session
+        db = get_db()
+        session = db.execute('SELECT * FROM sessions WHERE session_id = ?', (session_id,)).fetchone()
+        if not session:
+            return jsonify({'success': False, 'message': 'Invalid session'}), 401
+        
+        # Generate quantum key using the existing key manager
+        key_data = key_manager.request_key(sender, recipient, 2048, 'message_aes', 24)
+        
+        logger.info(f"QKD key generated: {key_data['key_id']} for {sender} -> {recipient}")
+        
+        return jsonify({
+            'success': True,
+            'key_id': key_data['key_id'],
+            'key_b64': key_data['key_block_b64'],
+            'expires_at': key_data['expires_at'],
+            'message': 'QKD key generated successfully'
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"QKD key request failed: {e}")
+        return jsonify({'success': False, 'message': 'QKD key request failed'}), 500
+
+@app.route('/api/login', methods=['POST', 'OPTIONS'])
+def login():
+    """User login - handles CORS preflight"""
+    if request.method == 'OPTIONS':
+        # Handle CORS preflight request
+        response = jsonify({'status': 'preflight'})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+        return response
     """User login"""
     try:
         data = request.get_json()
