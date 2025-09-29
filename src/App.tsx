@@ -62,6 +62,19 @@ function App() {
   const [keys, setKeys] = useState<QKDKey[]>([]);
   const [decryptedBodies, setDecryptedBodies] = useState<Record<string, string>>({});
 
+  // Check backend health
+  const checkBackendHealth = async () => {
+    try {
+      const response = await fetch('http://localhost:5001/health');
+      const data = await response.json();
+      console.log('✅ Backend health check:', data);
+      return true;
+    } catch (error) {
+      console.error('❌ Backend health check failed:', error);
+      return false;
+    }
+  };
+
   // Show notification
   const showNotification = (type: 'success' | 'error' | 'info', message: string) => {
     setNotification({ type, message });
@@ -285,6 +298,9 @@ function App() {
 
   // Load data when view changes
   useEffect(() => {
+    // Check backend health on startup
+    checkBackendHealth();
+    
     if (session) {
       if (currentView === 'inbox') {
         loadEmails();
