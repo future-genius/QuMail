@@ -71,7 +71,37 @@ function App() {
   };
 
   // API calls
-zzz;
+  const apiCall = async (endpoint: string, options: RequestInit = {}) => {
+    const url = `${API_BASE}${endpoint}`;
+    
+    const defaultHeaders = {
+      'Content-Type': 'application/json',
+    };
+    
+    const config = {
+      ...options,
+      headers: {
+        ...defaultHeaders,
+        ...options.headers,
+      },
+    };
+    
+    try {
+      const response = await fetch(url, config);
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || `HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      return await response.json();
+    } catch (error) {
+      if (error instanceof TypeError && error.message.includes('fetch')) {
+        throw new Error('Network error: Cannot reach QuMail backend. Please check if the Flask server is running on port 5001.');
+      }
+      throw error;
+    }
+  };
 
   // Login
   const handleLogin = async () => {
