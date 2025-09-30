@@ -30,8 +30,13 @@ def get_db():
     """Get database connection"""
     db = getattr(g, '_database', None)
     if db is None:
-        db = g._database = sqlite3.connect(DATABASE)
-        db.row_factory = sqlite3.Row
+        try:
+            db = g._database = sqlite3.connect(DATABASE)
+            db.row_factory = sqlite3.Row
+            logger.info(f"✅ Database connection established: {DATABASE}")
+        except sqlite3.Error as e:
+            logger.error(f"❌ Database connection failed: {e}")
+            raise
     return db
 
 @app.teardown_appcontext
