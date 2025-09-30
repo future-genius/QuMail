@@ -8,8 +8,8 @@
     "build": "tsc && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "backend": "python backend/app.py",
-    "start": "python backend/app.py",
+    "backend": "python start_backend.py",
+    "start": "python start_backend.py",
     "dev:all": "concurrently \"npm run backend\" \"npm run dev\""
   },
   "dependencies": {

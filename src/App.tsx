@@ -125,7 +125,7 @@ function App() {
     } catch (error) {
       console.error(`❌ API Error:`, error);
       if (error instanceof TypeError && error.message.includes('fetch')) {
-        throw new Error('Network error: Cannot reach QuMail backend. Please ensure the Express server (backend/server.cjs) is running on port 5001.');
+        throw new Error('Network error: Cannot reach QuMail backend. Please ensure the Flask server (backend/app.py) is running on port 5001.');
       }
       throw error;
     }
