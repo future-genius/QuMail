@@ -66,7 +66,7 @@ function App() {
   // Check backend health
   const checkBackendHealth = async () => {
     try {
-      const response = await fetch('http://localhost:5001/health', {
+      const response = await fetch('/api/health', {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -96,7 +96,7 @@ function App() {
 
   // API calls
   const apiCall = async (endpoint: string, options: RequestInit = {}) => {
-    const url = `http://localhost:5001${endpoint}`;
+    const url = endpoint;
     
     const defaultHeaders = {
       'Content-Type': 'application/json',
@@ -125,7 +125,7 @@ function App() {
     } catch (error) {
       console.error(`❌ API Error:`, error);
       if (error instanceof TypeError && error.message.includes('fetch')) {
-        throw new Error('Network error: Cannot reach QuMail backend. Please ensure the Python Flask server (backend/app.py) is running on port 5001.');
+        throw new Error('Network error: Cannot reach QuMail backend. Please ensure the Express server (backend/server.cjs) is running on port 5001.');
       }
       throw error;
     }

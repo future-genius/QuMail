@@ -8,14 +8,16 @@
     "build": "tsc && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "backend": "python backend/app.py",
-    "start": "python backend/app.py",
+    "backend": "node backend/server.cjs",
+    "start": "node backend/server.cjs",
     "dev:all": "concurrently \"npm run backend\" \"npm run dev\""
   },
   "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "lucide-react": "^0.344.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "lucide-react": "^0.344.0"
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.1",
