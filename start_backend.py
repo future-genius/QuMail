@@ -43,8 +43,10 @@ def start_backend():
     # Start Flask server
     print("🚀 Starting Flask server on port 5001...")
     try:
+        # Use virtual environment python if available, fallback to system python
+        venv_python = '.venv/bin/python' if os.path.exists('.venv/bin/python') else sys.executable
         process = subprocess.Popen([
-            sys.executable, 'app.py'
+            venv_python, 'app.py'
         ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     except Exception as e:
         print(f"❌ Failed to start Flask process: {e}")
@@ -85,6 +87,10 @@ if __name__ == "__main__":
                 time.sleep(1)
         except KeyboardInterrupt:
             print("\n👋 Stopping QuMail backend...")
+            # Properly terminate the Flask process
+            if 'process' in locals():
+                process.terminate()
+                process.wait()
     else:
         print("\n💥 Failed to start QuMail backend")
         sys.exit(1)
