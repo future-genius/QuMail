@@ -29,7 +29,9 @@ def start_backend():
     # Install dependencies if needed
     print("📦 Checking Python dependencies...")
     try:
-        subprocess.run([sys.executable, '-m', 'pip', 'install', '-r', 'requirements.txt'], 
+        # Use virtual environment python if available
+        venv_python = '.venv/bin/python' if os.path.exists('.venv/bin/python') else sys.executable
+        subprocess.run([venv_python, '-m', 'pip', 'install', '-r', 'requirements.txt'], 
                       check=True, capture_output=True)
         print("✅ Dependencies installed/verified")
     except subprocess.CalledProcessError as e:
