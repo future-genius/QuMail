@@ -9,7 +9,6 @@
     "lint": "eslint .",
     "backend": "source .venv/bin/activate && python start_backend.py",
     "start": "source .venv/bin/activate && python start_backend.py",
-    "dev:all": "concurrently \"source .venv/bin/activate && python start_backend.py\" \"npm run dev\""
     "dev:all": "concurrently \"npm run backend\" \"npm run dev\""
   },
   "dependencies": {
