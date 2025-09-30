@@ -26,14 +26,27 @@ def start_backend():
         os.system("pkill -f 'python.*app.py' || true")
         time.sleep(2)
     
+    # Install dependencies if needed
+    print("📦 Checking Python dependencies...")
+    try:
+        subprocess.run([sys.executable, '-m', 'pip', 'install', '-r', 'requirements.txt'], 
+                      check=True, capture_output=True)
+        print("✅ Dependencies installed/verified")
+    except subprocess.CalledProcessError as e:
+        print(f"⚠️  Warning: Could not install dependencies: {e}")
+    
     # Change to backend directory
     os.chdir('backend')
     
     # Start Flask server
     print("🚀 Starting Flask server on port 5001...")
-    process = subprocess.Popen([
-        sys.executable, 'app.py'
-    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        process = subprocess.Popen([
+            sys.executable, 'app.py'
+        ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    except Exception as e:
+        print(f"❌ Failed to start Flask process: {e}")
+        return False
     
     # Wait for server to start
     print("⏳ Waiting for server to start...")
@@ -44,8 +57,15 @@ def start_backend():
                 print("✅ Backend server is running!")
                 print(f"   Health check: {response.json()}")
                 return True
-        except:
-            pass
+        except Exception as e:
+            if i == 9:  # Last attempt
+                print(f"   Connection error: {e}")
+                # Check if process is still running
+                if process.poll() is not None:
+                    stdout, stderr = process.communicate()
+                    print(f"❌ Flask process exited with code {process.returncode}")
+                    if stdout:
+                        print(f"   Output: {stdout}")
         time.sleep(1)
         print(f"   Attempt {i+1}/10...")
     
