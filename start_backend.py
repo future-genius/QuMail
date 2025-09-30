@@ -37,16 +37,13 @@ def start_backend():
     except subprocess.CalledProcessError as e:
         print(f"⚠️  Warning: Could not install dependencies: {e}")
     
-    # Change to backend directory
-    os.chdir('backend')
-    
     # Start Flask server
     print("🚀 Starting Flask server on port 5001...")
     try:
         # Use virtual environment python if available, fallback to system python
-        venv_python = '.venv/bin/python' if os.path.exists('.venv/bin/python') else sys.executable
+        venv_python = '.venv/bin/python' if os.path.exists('.venv/bin/python') else 'python3'
         process = subprocess.Popen([
-            venv_python, 'app.py'
+            venv_python, 'backend/app.py'
         ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     except Exception as e:
         print(f"❌ Failed to start Flask process: {e}")
