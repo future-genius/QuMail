@@ -218,7 +218,7 @@ def decrypt_message(ciphertext_b64, nonce_b64, key_b64):
 
 # API Routes
 
-@app.route('/health', methods=['GET', 'OPTIONS'])
+@app.route('/api/health', methods=['GET', 'OPTIONS'])
 def health_check():
     """Health check endpoint"""
     if request.method == 'OPTIONS':
