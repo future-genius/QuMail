@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --config vite.config.ts",
     "build": "tsc && vite build",
     "lint": "eslint .",
     "backend": "source .venv/bin/activate && python start_backend.py",
