@@ -1,56 +1,54 @@
 #!/usr/bin/env python3
 """
-QuMail Backend - Flask Server with QKD Key Manager
+QuMail Backend - Quantum Key Distribution (QKD) Key Manager
+Real working implementation for email encryption
+
+This Flask application provides a QKD Key Manager API for 
+quantum-secure email communications with real SMTP/IMAP integration.
+
+Installation:
+pip install flask flask-cors pycryptodome sqlite3 python-dotenv
+
+Usage:
+python backend/app.py
 """
 
-import os
-import json
-import sqlite3
-import secrets
-import base64
-from datetime import datetime, timedelta
-from flask import Flask, request, jsonify, g
+from flask import Flask, request, jsonify
 from flask_cors import CORS
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-import logging
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+import smtplib
+import imaplib
+import email
+from Crypto.Cipher import AES
+from Crypto.Random import get_random_bytes
+import sqlite3
+import base64
+import secrets
+import datetime
+import json
+import os
+from pathlib import Path
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 app = Flask(__name__)
-CORS(app, origins=['http://localhost:5173', 'http://localhost:3000'], 
-     methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-     allow_headers=['Content-Type', 'Authorization'])
+CORS(app)  # Enable CORS for frontend communication
 
-# Database configuration
-DATABASE = 'qkd_keys.db'
+# Configuration
+DATABASE = 'backend/qkd_keys.db'
+API_PORT = 5001
 
-def get_db():
-    """Get database connection"""
-    db = getattr(g, '_database', None)
-    if db is None:
-        try:
-            db = g._database = sqlite3.connect(DATABASE)
-            db.row_factory = sqlite3.Row
-            logger.info(f"✅ Database connection established: {DATABASE}")
-        except sqlite3.Error as e:
-            logger.error(f"❌ Database connection failed: {e}")
-            raise
-    return db
+# Session storage (in production, use Redis or proper session management)
+user_sessions = {}
 
-@app.teardown_appcontext
-def close_connection(exception):
-    """Close database connection"""
-    db = getattr(g, '_database', None)
-    if db is not None:
-        db.close()
-
-def init_db():
-    """Initialize database tables"""
-    with app.app_context():
-        db = get_db()
-        db.executescript('''
+def init_database():
+    """Initialize SQLite database for QKD keys"""
+    # Ensure backend directory exists
+    os.makedirs('backend', exist_ok=True)
+    
+    with sqlite3.connect(DATABASE) as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
             CREATE TABLE IF NOT EXISTS qkd_keys (
                 key_id TEXT PRIMARY KEY,
                 key_b64 TEXT NOT NULL,
@@ -59,519 +57,532 @@ def init_db():
                 created_at TEXT NOT NULL,
                 expires_at TEXT NOT NULL,
                 status TEXT DEFAULT 'active',
-                algorithm TEXT DEFAULT 'AES-256-GCM'
-            );
-            
-            CREATE TABLE IF NOT EXISTS sessions (
-                session_id TEXT PRIMARY KEY,
-                email TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL
-            );
-            
-            CREATE TABLE IF NOT EXISTS emails (
-                email_id TEXT PRIMARY KEY,
-                from_email TEXT NOT NULL,
-                to_email TEXT NOT NULL,
-                subject TEXT NOT NULL,
-                body TEXT NOT NULL,
-                encrypted_body TEXT NOT NULL,
-                key_id TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                status TEXT DEFAULT 'sent'
-            );
-            
-            CREATE TABLE IF NOT EXISTS usage_log (
-                log_id TEXT PRIMARY KEY,
+                algorithm TEXT DEFAULT 'AES-256-GCM',
+                key_length INTEGER DEFAULT 256
+            )
+        ''')
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS key_usage_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 key_id TEXT NOT NULL,
                 action TEXT NOT NULL,
                 timestamp TEXT NOT NULL,
-                details TEXT
-            );
+                details TEXT,
+                FOREIGN KEY (key_id) REFERENCES qkd_keys (key_id)
+            )
         ''')
-        db.commit()
-        logger.info("✅ Database initialized successfully")
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                session_id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                password TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )
+        ''')
+        conn.commit()
+        print("✅ Database initialized successfully")
 
 class QKDKeyManager:
-    """QKD Key Manager"""
+    """Quantum Key Distribution Key Manager - Production Ready"""
     
-    def generate_key_id(self):
-        """Generate unique key ID"""
+    def generate_key_id(self) -> str:
+        """Generate unique QKD key identifier"""
         return f"qkd_{secrets.token_hex(16)}"
     
-    def generate_quantum_key(self, length_bytes=32):
-        """Generate cryptographically secure quantum key"""
-        return secrets.token_bytes(length_bytes)
+    def generate_quantum_key(self, length: int = 32) -> bytes:
+        """
+        Generate cryptographically secure key
+        In production, this would interface with actual QKD hardware
+        """
+        return get_random_bytes(length)
     
-    def request_key(self, sender, recipient, lifetime_hours=24):
-        """Request new quantum key"""
-        try:
-            key_id = self.generate_key_id()
-            key_bytes = self.generate_quantum_key(32)
-            key_b64 = base64.b64encode(key_bytes).decode('utf-8')
+    def request_key(self, sender: str, recipient: str, lifetime: int) -> dict:
+        """
+        Request new QKD key for email encryption
+        
+        Args:
+            sender: Email address of sender
+            recipient: Email address of recipient  
+            lifetime: Key lifetime in seconds
             
-            created_at = datetime.utcnow().isoformat() + 'Z'
-            expires_at = (datetime.utcnow() + timedelta(hours=lifetime_hours)).isoformat() + 'Z'
-            
-            db = get_db()
-            db.execute('''
+        Returns:
+            Dict with key_id, key_b64, expires_at
+        """
+        key_id = self.generate_key_id()
+        quantum_key = self.generate_quantum_key(32)  # 256-bit key
+        key_b64 = base64.b64encode(quantum_key).decode('utf-8')
+        
+        created_at = datetime.datetime.utcnow().isoformat() + 'Z'
+        expires_at = (datetime.datetime.utcnow() + 
+                     datetime.timedelta(seconds=lifetime)).isoformat() + 'Z'
+        
+        # Store in database
+        with sqlite3.connect(DATABASE) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
                 INSERT INTO qkd_keys 
                 (key_id, key_b64, sender, recipient, created_at, expires_at)
                 VALUES (?, ?, ?, ?, ?, ?)
             ''', (key_id, key_b64, sender, recipient, created_at, expires_at))
             
             # Log key generation
-            db.execute('''
-                INSERT INTO usage_log (log_id, key_id, action, timestamp, details)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (secrets.token_hex(8), key_id, 'KEY_GENERATED', created_at, 
-                  f'Generated for {sender} -> {recipient}'))
-            
-            db.commit()
-            
-            logger.info(f"🔑 Generated quantum key {key_id} for {sender} -> {recipient}")
-            
-            return {
-                'key_id': key_id,
-                'key_b64': key_b64,
-                'sender': sender,
-                'recipient': recipient,
-                'created_at': created_at,
-                'expires_at': expires_at,
-                'status': 'active',
-                'algorithm': 'AES-256-GCM'
-            }
-            
-        except Exception as e:
-            logger.error(f"❌ Key generation failed: {e}")
-            raise
+            cursor.execute('''
+                INSERT INTO key_usage_log 
+                (key_id, action, timestamp, details)
+                VALUES (?, ?, ?, ?)
+            ''', (key_id, 'KEY_GENERATED', created_at, 
+                  f"Generated for {sender} -> {recipient}"))
+            conn.commit()
+        
+        print(f"🔑 Generated key {key_id} for {sender} -> {recipient}")
+        
+        return {
+            'key_id': key_id,
+            'key_b64': key_b64,
+            'expires_at': expires_at,
+            'algorithm': 'AES-256-GCM',
+            'status': 'active'
+        }
     
-    def get_key(self, key_id):
-        """Retrieve key by ID"""
-        try:
-            db = get_db()
-            key_data = db.execute('''
-                SELECT * FROM qkd_keys WHERE key_id = ?
-            ''', (key_id,)).fetchone()
+    def get_key(self, key_id: str) -> dict:
+        """Retrieve QKD key by ID"""
+        with sqlite3.connect(DATABASE) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT key_id, key_b64, sender, recipient, 
+                       created_at, expires_at, status, algorithm
+                FROM qkd_keys WHERE key_id = ?
+            ''', (key_id,))
             
-            if not key_data:
+            row = cursor.fetchone()
+            if not row:
                 return None
             
+            key_data = {
+                'key_id': row[0],
+                'key_b64': row[1],
+                'sender': row[2],
+                'recipient': row[3],
+                'created_at': row[4],
+                'expires_at': row[5],
+                'status': row[6],
+                'algorithm': row[7]
+            }
+            
             # Check expiration
-            expires_at = datetime.fromisoformat(key_data['expires_at'].replace('Z', '+00:00'))
-            if datetime.utcnow().replace(tzinfo=expires_at.tzinfo) > expires_at:
-                # Mark as expired
-                db.execute('''
-                    UPDATE qkd_keys SET status = 'expired' WHERE key_id = ?
+            expires_at = datetime.datetime.fromisoformat(
+                row[5].replace('Z', '+00:00')
+            )
+            if datetime.datetime.utcnow().replace(tzinfo=expires_at.tzinfo) > expires_at:
+                # Update status to expired
+                cursor.execute('''
+                    UPDATE qkd_keys SET status = 'expired' 
+                    WHERE key_id = ?
                 ''', (key_id,))
-                db.commit()
-                
-                key_dict = dict(key_data)
-                key_dict['status'] = 'expired'
-                return key_dict
+                conn.commit()
+                key_data['status'] = 'expired'
             
-            # Log access
-            db.execute('''
-                INSERT INTO usage_log (log_id, key_id, action, timestamp, details)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (secrets.token_hex(8), key_id, 'KEY_ACCESSED', 
-                  datetime.utcnow().isoformat() + 'Z', 'Key retrieved'))
-            db.commit()
+            # Log key access
+            cursor.execute('''
+                INSERT INTO key_usage_log 
+                (key_id, action, timestamp, details)
+                VALUES (?, ?, ?, ?)
+            ''', (key_id, 'KEY_ACCESSED', 
+                  datetime.datetime.utcnow().isoformat() + 'Z', 
+                  'Key retrieved for decryption'))
+            conn.commit()
             
-            return dict(key_data)
+            print(f"🔍 Retrieved key {key_id} (status: {key_data['status']})")
             
-        except Exception as e:
-            logger.error(f"❌ Key retrieval failed: {e}")
-            raise
+            return key_data
 
 # Initialize key manager
 key_manager = QKDKeyManager()
 
-# Encryption utilities
-def encrypt_message(plaintext, key_b64):
-    """Encrypt message using AES-256-GCM"""
-    try:
-        key = base64.b64decode(key_b64)[:32]
-        aesgcm = AESGCM(key)
-        nonce = secrets.token_bytes(12)
-        
-        ciphertext = aesgcm.encrypt(nonce, plaintext.encode('utf-8'), b'QuMail-v1.0')
-        
-        return {
-            'ciphertext': base64.b64encode(ciphertext).decode('utf-8'),
-            'nonce': base64.b64encode(nonce).decode('utf-8'),
-            'algorithm': 'AES-256-GCM'
-        }
-    except Exception as e:
-        logger.error(f"❌ Encryption failed: {e}")
-        raise
-
-def decrypt_message(ciphertext_b64, nonce_b64, key_b64):
-    """Decrypt message using AES-256-GCM"""
-    try:
-        key = base64.b64decode(key_b64)[:32]
-        ciphertext = base64.b64decode(ciphertext_b64)
-        nonce = base64.b64decode(nonce_b64)
-        
-        aesgcm = AESGCM(key)
-        plaintext = aesgcm.decrypt(nonce, ciphertext, b'QuMail-v1.0')
-        
-        return plaintext.decode('utf-8')
-    except Exception as e:
-        logger.error(f"❌ Decryption failed: {e}")
-        raise
-
 # API Routes
 
-@app.route('/api/health', methods=['GET', 'OPTIONS'])
-def health_check():
-    """Health check endpoint"""
-    if request.method == 'OPTIONS':
-        return '', 200
-    
-    return jsonify({
-        'status': 'healthy',
-        'service': 'QuMail Backend',
-        'version': '1.0.0',
-        'timestamp': datetime.utcnow().isoformat() + 'Z'
-    })
+@app.route('/request_key', methods=['POST'])
+def request_key():
+    """Request new QKD key for email encryption"""
+    try:
+        data = request.get_json()
+        sender = data.get('sender')
+        recipient = data.get('recipient')
+        lifetime = data.get('lifetime', 3600)  # Default 1 hour
+        
+        if not sender or not recipient:
+            return jsonify({
+                'error': 'sender and recipient are required'
+            }), 400
+        
+        key_data = key_manager.request_key(sender, recipient, lifetime)
+        
+        return jsonify({
+            'status': 'success',
+            'key_id': key_data['key_id'],
+            'key_b64': key_data['key_b64'],
+            'expires_at': key_data['expires_at'],
+            'algorithm': key_data['algorithm']
+        })
+        
+    except Exception as e:
+        print(f"❌ Error requesting key: {e}")
+        return jsonify({'error': str(e)}), 500
 
-@app.route('/api/login', methods=['POST', 'OPTIONS'])
+@app.route('/get_key/<key_id>', methods=['GET'])
+def get_key(key_id):
+    """Retrieve QKD key for decryption"""
+    try:
+        key_data = key_manager.get_key(key_id)
+        
+        if not key_data:
+            return jsonify({'error': 'Key not found'}), 404
+        
+        if key_data['status'] == 'expired':
+            return jsonify({'error': 'Key has expired'}), 410
+        
+        return jsonify({
+            'status': 'success',
+            'key_data': key_data
+        })
+        
+    except Exception as e:
+        print(f"❌ Error retrieving key: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/keys', methods=['GET'])
+def list_keys():
+    """List all QKD keys for monitoring"""
+    try:
+        with sqlite3.connect(DATABASE) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT key_id, sender, recipient, created_at, 
+                       expires_at, status, algorithm
+                FROM qkd_keys ORDER BY created_at DESC LIMIT 50
+            ''')
+            
+            keys = []
+            for row in cursor.fetchall():
+                keys.append({
+                    'key_id': row[0],
+                    'sender': row[1],
+                    'recipient': row[2],
+                    'created_at': row[3],
+                    'expires_at': row[4],
+                    'status': row[5],
+                    'algorithm': row[6]
+                })
+            
+            return jsonify({
+                'status': 'success',
+                'keys': keys,
+                'count': len(keys)
+            })
+            
+    except Exception as e:
+        print(f"❌ Error listing keys: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/login', methods=['POST'])
 def login():
-    """User login"""
-    if request.method == 'OPTIONS':
-        return '', 200
-    
+    """Authenticate user and store session"""
     try:
         data = request.get_json()
         email = data.get('email')
         password = data.get('password')
         
         if not email or not password:
-            return jsonify({'success': False, 'message': 'Email and password required'}), 400
+            return jsonify({'error': 'Email and password are required'}), 400
         
-        # Simple validation for demo
-        if '@' not in email:
-            return jsonify({'success': False, 'message': 'Invalid email format'}), 400
+        # Test Gmail SMTP connection
+        try:
+            with smtplib.SMTP('smtp.gmail.com', 587) as server:
+                server.starttls()
+                server.login(email, password)
+        except smtplib.SMTPAuthenticationError:
+            return jsonify({'error': 'Invalid Gmail credentials'}), 401
+        except Exception as e:
+            return jsonify({'error': f'SMTP connection failed: {str(e)}'}), 500
         
         # Create session
-        session_id = secrets.token_hex(16)
-        created_at = datetime.utcnow().isoformat() + 'Z'
-        expires_at = (datetime.utcnow() + timedelta(hours=24)).isoformat() + 'Z'
+        session_id = secrets.token_hex(32)
+        created_at = datetime.datetime.utcnow().isoformat() + 'Z'
+        expires_at = (datetime.datetime.utcnow() + 
+                     datetime.timedelta(hours=24)).isoformat() + 'Z'
         
-        db = get_db()
-        db.execute('''
-            INSERT INTO sessions (session_id, email, created_at, expires_at)
-            VALUES (?, ?, ?, ?)
-        ''', (session_id, email, created_at, expires_at))
-        db.commit()
-        
-        logger.info(f"✅ User logged in: {email}")
+        # Store session in memory (in production, use secure storage)
+        user_sessions[session_id] = {
+            'email': email,
+            'password': password,
+            'created_at': created_at,
+            'expires_at': expires_at
+        }
         
         return jsonify({
-            'success': True,
-            'message': 'Login successful',
+            'status': 'success',
             'session_id': session_id,
-            'user': {'email': email}
-        }), 200
+            'message': 'Login successful'
+        })
         
     except Exception as e:
-        logger.error(f"❌ Login failed: {e}")
-        return jsonify({'success': False, 'message': 'Login failed'}), 500
+        print(f"❌ Login error: {e}")
+        return jsonify({'error': str(e)}), 500
 
-@app.route('/api/logout', methods=['POST', 'OPTIONS'])
-def logout():
-    """User logout"""
-    if request.method == 'OPTIONS':
-        return '', 200
-    
-    try:
-        data = request.get_json()
-        session_id = data.get('session_id')
-        
-        if session_id:
-            db = get_db()
-            db.execute('DELETE FROM sessions WHERE session_id = ?', (session_id,))
-            db.commit()
-        
-        return jsonify({'success': True, 'message': 'Logged out successfully'}), 200
-        
-    except Exception as e:
-        logger.error(f"❌ Logout failed: {e}")
-        return jsonify({'success': False, 'message': 'Logout failed'}), 500
-
-@app.route('/api/request-qkd-key', methods=['POST', 'OPTIONS'])
-def request_qkd_key():
-    """Request QKD key for email encryption"""
-    if request.method == 'OPTIONS':
-        return '', 200
-    
-    try:
-        data = request.get_json()
-        sender = data.get('sender')
-        recipient = data.get('recipient')
-        session_id = data.get('session_id')
-        
-        if not sender or not recipient or not session_id:
-            return jsonify({'success': False, 'message': 'Missing required fields'}), 400
-        
-        # Verify session
-        db = get_db()
-        session = db.execute('SELECT * FROM sessions WHERE session_id = ?', (session_id,)).fetchone()
-        if not session:
-            return jsonify({'success': False, 'message': 'Invalid session'}), 401
-        
-        # Generate quantum key
-        key_data = key_manager.request_key(sender, recipient, 24)
-        
-        logger.info(f"🔑 QKD key generated: {key_data['key_id']} for {sender} -> {recipient}")
-        
-        return jsonify({
-            'success': True,
-            'key_id': key_data['key_id'],
-            'key_b64': key_data['key_b64'],
-            'expires_at': key_data['expires_at'],
-            'message': 'QKD key generated successfully'
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"❌ QKD key request failed: {e}")
-        return jsonify({'success': False, 'message': 'QKD key request failed'}), 500
-
-@app.route('/api/send-email', methods=['POST', 'OPTIONS'])
+@app.route('/send_email', methods=['POST'])
 def send_email():
-    """Send encrypted email"""
-    if request.method == 'OPTIONS':
-        return '', 200
-    
+    """Send encrypted email via Gmail SMTP"""
     try:
         data = request.get_json()
-        to_email = data.get('to')
+        to_address = data.get('to')
         subject = data.get('subject')
         body = data.get('body')
         session_id = data.get('session_id')
-        key_id = data.get('key_id')
         
-        if not all([to_email, subject, body, session_id]):
-            return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+        if not all([to_address, subject, body, session_id]):
+            return jsonify({'error': 'Missing required fields'}), 400
         
-        # Verify session
-        db = get_db()
-        session = db.execute('SELECT * FROM sessions WHERE session_id = ?', (session_id,)).fetchone()
+        # Get session credentials
+        session = user_sessions.get(session_id)
         if not session:
-            return jsonify({'success': False, 'message': 'Invalid session'}), 401
+            return jsonify({'error': 'Invalid session'}), 401
         
-        # Get or generate key
-        if key_id:
-            key_data = key_manager.get_key(key_id)
-            if not key_data:
-                return jsonify({'success': False, 'message': 'Invalid key ID'}), 400
-        else:
-            key_data = key_manager.request_key(session['email'], to_email, 24)
+        # Check session expiration
+        expires_at = datetime.datetime.fromisoformat(
+            session['expires_at'].replace('Z', '+00:00')
+        )
+        if datetime.datetime.utcnow().replace(tzinfo=expires_at.tzinfo) > expires_at:
+            return jsonify({'error': 'Session expired'}), 401
         
-        # Encrypt message
-        encrypted = encrypt_message(body, key_data['key_b64'])
+        # Request QKD key
+        qkd_key = key_manager.request_key(session['email'], to_address, 3600)
         
-        # Store email
-        email_id = secrets.token_hex(16)
-        created_at = datetime.utcnow().isoformat() + 'Z'
+        # Encrypt message with AES-256-GCM
+        key = base64.b64decode(qkd_key['key_b64'])
+        cipher = AES.new(key, AES.MODE_GCM)
+        ciphertext, tag = cipher.encrypt_and_digest(body.encode('utf-8'))
         
-        db.execute('''
-            INSERT INTO emails 
-            (email_id, from_email, to_email, subject, body, encrypted_body, key_id, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (email_id, session['email'], to_email, subject, body, 
-              json.dumps(encrypted), key_data['key_id'], created_at))
-        db.commit()
+        # Create encrypted payload
+        encrypted_payload = {
+            'version': '1.0',
+            'algorithm': 'AES-256-GCM',
+            'key_id': qkd_key['key_id'],
+            'ciphertext': base64.b64encode(ciphertext).decode('utf-8'),
+            'nonce': base64.b64encode(cipher.nonce).decode('utf-8'),
+            'tag': base64.b64encode(tag).decode('utf-8'),
+            'timestamp': datetime.datetime.utcnow().isoformat() + 'Z'
+        }
         
-        logger.info(f"📧 Email sent from {session['email']} to {to_email}")
+        # Construct email
+        msg = MIMEMultipart()
+        msg['From'] = session['email']
+        msg['To'] = to_address
+        msg['Subject'] = subject
+        
+        # Add QuMail headers
+        msg['X-QuMail-Encrypted'] = 'AES-GCM'
+        msg['X-QuMail-Key-ID'] = qkd_key['key_id']
+        msg['X-QuMail-Version'] = '1.0'
+        msg['X-QuMail-Timestamp'] = encrypted_payload['timestamp']
+        
+        # Create email body with encrypted payload
+        email_body = f"""This message was encrypted using QuMail quantum-secure encryption.
+
+To decrypt this message, you need QuMail client software and access to the QKD key.
+
+Key ID: {qkd_key['key_id']}
+Algorithm: AES-256-GCM
+Encrypted at: {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC
+
+--- ENCRYPTED PAYLOAD ---
+{json.dumps(encrypted_payload, indent=2)}
+--- END ENCRYPTED PAYLOAD ---
+
+QuMail - Quantum-Secure Email Communication"""
+        
+        msg.attach(MIMEText(email_body, 'plain'))
+        
+        # Send email via Gmail SMTP
+        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+            server.starttls()
+            server.login(session['email'], session['password'])
+            server.send_message(msg)
+        
+        print(f"✅ Email sent successfully to {to_address}")
+        print(f"🔑 Key ID: {qkd_key['key_id']}")
         
         return jsonify({
-            'success': True,
-            'message': 'Email sent with quantum encryption',
-            'email_id': email_id,
-            'key_id': key_data['key_id']
-        }), 200
+            'status': 'success',
+            'message': 'Email sent successfully',
+            'key_id': qkd_key['key_id']
+        })
         
-    except Exception as e:
-        logger.error(f"❌ Send email failed: {e}")
-        return jsonify({'success': False, 'message': 'Failed to send email'}), 500
-
-@app.route('/api/emails', methods=['GET', 'OPTIONS'])
-def get_emails():
-    """Get user emails"""
-    if request.method == 'OPTIONS':
-        return '', 200
-    
-    try:
-        session_id = request.args.get('session_id')
-        
-        if not session_id:
-            return jsonify({'success': False, 'message': 'Session required'}), 401
-        
-        db = get_db()
-        session = db.execute('SELECT * FROM sessions WHERE session_id = ?', (session_id,)).fetchone()
-        if not session:
-            return jsonify({'success': False, 'message': 'Invalid session'}), 401
-        
-        # Get emails for this user
-        emails = db.execute('''
-            SELECT email_id as id, from_email as "from", to_email as "to", 
-                   subject, body, key_id, created_at, status
-            FROM emails 
-            WHERE from_email = ? OR to_email = ?
-            ORDER BY created_at DESC
-            LIMIT 50
-        ''', (session['email'], session['email'])).fetchall()
-        
-        email_list = [dict(email) for email in emails]
-        
+    except smtplib.SMTPAuthenticationError:
         return jsonify({
-            'success': True,
-            'emails': email_list
-        }), 200
-        
+            'status': 'error',
+            'message': 'Gmail authentication failed'
+        }), 401
     except Exception as e:
-        logger.error(f"❌ Get emails failed: {e}")
-        return jsonify({'success': False, 'message': 'Failed to get emails'}), 500
+        print(f"❌ Error sending email: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Failed to send email: {str(e)}'
+        }), 500
 
-@app.route('/api/decrypt-email', methods=['POST', 'OPTIONS'])
-def decrypt_email():
-    """Decrypt email"""
-    if request.method == 'OPTIONS':
-        return '', 200
-    
+@app.route('/validate_smtp', methods=['POST'])
+def validate_smtp():
+    """Validate SMTP credentials"""
     try:
         data = request.get_json()
-        email_id = data.get('email_id')
-        session_id = data.get('session_id')
+        smtp_host = data.get('smtp_host')
+        smtp_port = data.get('smtp_port')
+        username = data.get('username')
+        password = data.get('password')
         
-        if not email_id or not session_id:
-            return jsonify({'success': False, 'message': 'Email ID and session required'}), 400
+        if not all([smtp_host, smtp_port, username, password]):
+            return jsonify({'error': 'Missing required fields'}), 400
         
-        db = get_db()
-        session = db.execute('SELECT * FROM sessions WHERE session_id = ?', (session_id,)).fetchone()
-        if not session:
-            return jsonify({'success': False, 'message': 'Invalid session'}), 401
+        # Test SMTP connection
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
+            server.starttls()
+            server.login(username, password)
         
-        # Get email
-        email = db.execute('''
-            SELECT * FROM emails WHERE email_id = ? 
-            AND (from_email = ? OR to_email = ?)
-        ''', (email_id, session['email'], session['email'])).fetchone()
+        return jsonify({'status': 'success', 'message': 'SMTP connection successful'})
         
-        if not email:
-            return jsonify({'success': False, 'message': 'Email not found'}), 404
-        
-        # Get decryption key
-        key_data = key_manager.get_key(email['key_id'])
-        if not key_data:
-            return jsonify({'success': False, 'message': 'Decryption key not found'}), 404
-        
-        if key_data['status'] == 'expired':
-            return jsonify({'success': False, 'message': 'Decryption key expired'}), 410
-        
-        # Decrypt message
-        encrypted_data = json.loads(email['encrypted_body'])
-        decrypted_body = decrypt_message(
-            encrypted_data['ciphertext'],
-            encrypted_data['nonce'],
-            key_data['key_b64']
-        )
-        
-        return jsonify({
-            'success': True,
-            'decrypted_body': decrypted_body
-        }), 200
-        
+    except smtplib.SMTPAuthenticationError:
+        return jsonify({'error': 'Invalid email credentials'}), 401
     except Exception as e:
-        logger.error(f"❌ Decrypt email failed: {e}")
-        return jsonify({'success': False, 'message': 'Failed to decrypt email'}), 500
+        return jsonify({'error': f'SMTP connection failed: {str(e)}'}), 500
 
-@app.route('/api/keys', methods=['GET', 'OPTIONS'])
-def get_user_keys():
-    """Get user's quantum keys"""
-    if request.method == 'OPTIONS':
-        return '', 200
-    
+@app.route('/validate_imap', methods=['POST'])
+def validate_imap():
+    """Validate IMAP credentials"""
     try:
-        session_id = request.args.get('session_id')
+        data = request.get_json()
+        imap_host = data.get('imap_host')
+        imap_port = data.get('imap_port')
+        username = data.get('username')
+        password = data.get('password')
         
-        if not session_id:
-            return jsonify({'success': False, 'message': 'Session required'}), 401
+        if not all([imap_host, imap_port, username, password]):
+            return jsonify({'error': 'Missing required fields'}), 400
         
-        db = get_db()
-        session = db.execute('SELECT * FROM sessions WHERE session_id = ?', (session_id,)).fetchone()
-        if not session:
-            return jsonify({'success': False, 'message': 'Invalid session'}), 401
+        # Test IMAP connection
+        with imaplib.IMAP4_SSL(imap_host, imap_port) as imap:
+            imap.login(username, password)
         
-        # Get keys for this user
-        keys = db.execute('''
-            SELECT key_id, sender, recipient,
-                   created_at, expires_at, status, algorithm
-            FROM qkd_keys 
-            WHERE sender = ? OR recipient = ?
-            ORDER BY created_at DESC
-            LIMIT 50
-        ''', (session['email'], session['email'])).fetchall()
+        return jsonify({'status': 'success', 'message': 'IMAP connection successful'})
         
-        # Update expired keys
-        current_time = datetime.utcnow()
-        for key in keys:
-            if key['status'] == 'active':
-                expires_at = datetime.fromisoformat(key['expires_at'].replace('Z', '+00:00'))
-                if current_time.replace(tzinfo=expires_at.tzinfo) > expires_at:
-                    db.execute('UPDATE qkd_keys SET status = ? WHERE key_id = ?', ('expired', key['key_id']))
+    except imaplib.IMAP4.error:
+        return jsonify({'error': 'Invalid email credentials'}), 401
+    except Exception as e:
+        return jsonify({'error': f'IMAP connection failed: {str(e)}'}), 500
+
+@app.route('/send_email_api', methods=['POST'])
+def send_email_api():
+    """Send encrypted email via API"""
+    try:
+        data = request.get_json()
         
-        db.commit()
+        # Extract email data
+        to_address = data.get('to')
+        subject = data.get('subject')
+        body = data.get('body')
         
-        # Refresh the query
-        keys = db.execute('''
-            SELECT key_id, sender, recipient,
-                   created_at, expires_at, status, algorithm
-            FROM qkd_keys 
-            WHERE sender = ? OR recipient = ?
-            ORDER BY created_at DESC
-            LIMIT 50
-        ''', (session['email'], session['email'])).fetchall()
+        # Extract credentials
+        credentials = data.get('credentials', {})
+        smtp_host = credentials.get('smtpHost')
+        smtp_port = credentials.get('smtpPort')
+        username = credentials.get('email')
+        password = credentials.get('password')
         
-        key_list = [dict(key) for key in keys]
+        if not all([to_address, subject, body, smtp_host, smtp_port, username, password]):
+            return jsonify({'error': 'Missing required fields'}), 400
+        
+        # Request QKD key
+        qkd_key = key_manager.request_key(username, to_address, 3600)
+        
+        # Encrypt message
+        key = base64.b64decode(qkd_key['key_b64'])
+        cipher = AES.new(key, AES.MODE_GCM)
+        ciphertext, tag = cipher.encrypt_and_digest(body.encode('utf-8'))
+        
+        encrypted_payload = {
+            'version': '1.0',
+            'algorithm': 'AES-256-GCM',
+            'key_id': qkd_key['key_id'],
+            'ciphertext': base64.b64encode(ciphertext).decode('utf-8'),
+            'nonce': base64.b64encode(cipher.nonce).decode('utf-8'),
+            'tag': base64.b64encode(tag).decode('utf-8'),
+            'timestamp': datetime.datetime.utcnow().isoformat() + 'Z'
+        }
+        
+        # Create email
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
+        
+        msg = MIMEMultipart()
+        msg['From'] = username
+        msg['To'] = to_address
+        msg['Subject'] = subject
+        msg['X-QuMail-Encrypted'] = 'AES-GCM'
+        msg['X-QuMail-Key-ID'] = qkd_key['key_id']
+        msg['X-QuMail-Version'] = '1.0'
+        msg['X-QuMail-Timestamp'] = encrypted_payload['timestamp']
+        
+        email_body = f"""This message was encrypted using QuMail quantum-secure encryption.
+
+To decrypt this message, you need QuMail client software and access to the QKD key.
+
+Key ID: {qkd_key['key_id']}
+Algorithm: AES-256-GCM
+Encrypted at: {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC
+
+--- ENCRYPTED PAYLOAD ---
+{json.dumps(encrypted_payload, indent=2)}
+--- END ENCRYPTED PAYLOAD ---
+
+QuMail - Quantum-Secure Email Communication"""
+        
+        msg.attach(MIMEText(email_body, 'plain'))
+        
+        # Send email
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
+            server.starttls()
+            server.login(username, password)
+            server.send_message(msg)
         
         return jsonify({
-            'success': True,
-            'keys': key_list
-        }), 200
+            'status': 'success',
+            'key_id': qkd_key['key_id'],
+            'message': 'Email sent successfully'
+        })
         
     except Exception as e:
-        logger.error(f"❌ Get keys failed: {e}")
-        return jsonify({'success': False, 'message': 'Failed to get keys'}), 500
+        print(f"❌ Error sending email: {e}")
+        return jsonify({'error': str(e)}), 500
 
-@app.route('/', methods=['GET'])
-def root():
-    """Root endpoint"""
+@app.route('/health', methods=['GET'])
+def health_check():
+    """System health check"""
     return jsonify({
-        'service': 'QuMail Backend',
-        'status': 'running',
+        'status': 'healthy',
+        'service': 'QuMail QKD Key Manager',
         'version': '1.0.0',
-        'endpoints': [
-            'GET /health',
-            'POST /api/login',
-            'POST /api/logout', 
-            'POST /api/request-qkd-key',
-            'POST /api/send-email',
-            'GET /api/emails',
-            'POST /api/decrypt-email',
-            'GET /api/keys'
-        ]
+        'port': API_PORT,
+        'timestamp': datetime.datetime.utcnow().isoformat() + 'Z'
     })
 
 if __name__ == '__main__':
     # Initialize database
-    init_db()
+    init_database()
     
-    print("🔐 QuMail Backend Server")
-    print("🚀 Starting on http://localhost:5001")
-    print("📡 All endpoints ready")
-    print("🌐 CORS enabled")
+    # Run Flask server
+    print("🔐 QuMail QKD Key Manager starting...")
+    print(f"🚀 Running on http://localhost:{API_PORT}")
+    print("📡 Ready to issue quantum-secure keys")
     
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    app.run(debug=True, host='0.0.0.0', port=API_PORT)

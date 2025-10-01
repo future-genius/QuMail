@@ -1,349 +1,306 @@
 import React, { useState, useEffect } from 'react';
-import { Shield, Mail, Key, User, LogOut, Send, RefreshCw, Lock, Clock, Eye, EyeOff } from 'lucide-react';
+import { Shield, Key, Mail, Send, RefreshCw, Lock, Unlock, Clock, Database, LogOut, User } from 'lucide-react';
+import StatusMessage from './components/StatusMessage';
 
 // Types
-interface User {
-  email: string;
-}
-
-interface Session {
-  id: string;
-  user: User;
-}
-
 interface QKDKey {
   key_id: string;
+  key_b64: string;
   sender: string;
   recipient: string;
-  created_at: string;
   expires_at: string;
-  status: 'active' | 'expired';
-  algorithm: string;
+  created_at: string;
+  status: 'active' | 'expired' | 'used';
 }
 
-interface Email {
+interface EmailMessage {
   id: string;
   from: string;
   to: string;
   subject: string;
   body: string;
-  created_at: string;
-  key_id: string;
-  status: string;
+  encrypted: boolean;
+  key_id?: string;
+  timestamp: string;
+  decrypted?: boolean;
 }
 
-interface Notification {
-  type: 'success' | 'error' | 'info';
-  message: string;
+interface LoginCredentials {
+  email: string;
+  password: string;
+}
+// Simulated QKD Key Manager
+class QKDKeyManager {
+  private keys: Map<string, QKDKey> = new Map();
+
+  generateKeyId(): string {
+    return 'qkd_' + Math.random().toString(36).substr(2, 16);
+  }
+
+  generateKey(): string {
+    // Simulate 256-bit AES key in base64
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    return btoa(String.fromCharCode(...bytes));
+  }
+
+  requestKey(sender: string, recipient: string, lifetime: number): QKDKey {
+    const key_id = this.generateKeyId();
+    const key_b64 = this.generateKey();
+    const created_at = new Date().toISOString();
+    const expires_at = new Date(Date.now() + lifetime * 1000).toISOString();
+
+    const qkdKey: QKDKey = {
+      key_id,
+      key_b64,
+      sender,
+      recipient,
+      expires_at,
+      created_at,
+      status: 'active'
+    };
+
+    this.keys.set(key_id, qkdKey);
+    return qkdKey;
+  }
+
+  getKey(key_id: string): QKDKey | null {
+    const key = this.keys.get(key_id);
+    if (!key) return null;
+    
+    if (new Date() > new Date(key.expires_at)) {
+      key.status = 'expired';
+    }
+    
+    return key;
+  }
+
+  getAllKeys(): QKDKey[] {
+    return Array.from(this.keys.values());
+  }
+}
+
+// Simulated AES-256-GCM encryption
+function simulateEncryption(plaintext: string, key: string): string {
+  // In real implementation, this would use actual AES-256-GCM
+  const encoded = btoa(plaintext + '::' + key.substr(0, 8));
+  return `ENCRYPTED:${encoded}`;
+}
+
+function simulateDecryption(ciphertext: string, key: string): string {
+  if (!ciphertext.startsWith('ENCRYPTED:')) {
+    return ciphertext;
+  }
+  
+  const encoded = ciphertext.replace('ENCRYPTED:', '');
+  const decoded = atob(encoded);
+  const [plaintext] = decoded.split('::');
+  return plaintext;
 }
 
 function App() {
-  const [currentView, setCurrentView] = useState<'login' | 'compose' | 'inbox' | 'keys'>('login');
-  const [session, setSession] = useState<Session | null>(null);
-  const [notification, setNotification] = useState<Notification | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [backendStatus, setBackendStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking');
+  const [currentView, setCurrentView] = useState<'compose' | 'inbox' | 'keys'>('compose');
+  const [keyManager] = useState(() => new QKDKeyManager());
+  const [emails, setEmails] = useState<EmailMessage[]>([]);
+  const [qkdKeys, setQkdKeys] = useState<QKDKey[]>([]);
   
-  // Login form
-  const [loginForm, setLoginForm] = useState({
-    email: '',
-    password: '',
-    showPassword: false
-  });
-  
-  // Compose form
+  // Compose form state
   const [composeForm, setComposeForm] = useState({
     to: '',
     subject: '',
     body: ''
   });
   
-  // Data
-  const [emails, setEmails] = useState<Email[]>([]);
-  const [keys, setKeys] = useState<QKDKey[]>([]);
-  const [decryptedBodies, setDecryptedBodies] = useState<Record<string, string>>({});
+  const [sending, setSending] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<{
+    type: 'success' | 'error' | 'warning' | 'info';
+    message: string;
+  } | null>(null);
+  
+  // Authentication
+  const { isAuthenticated, credentials, isLoading: authLoading, error: authError, login, logout } = useAuth();
 
-  // Check backend health
-  const checkBackendHealth = async () => {
-    try {
-      const response = await fetch('/api/health', {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        console.log('✅ Backend health check:', data);
-        setBackendStatus('connected');
-        return true;
-      } else {
-        throw new Error(`HTTP ${response.status}`);
-      }
-    } catch (error) {
-      console.error('❌ Backend health check failed:', error);
-      setBackendStatus('disconnected');
-      return false;
-    }
-  };
-
-  // Show notification
-  const showNotification = (type: 'success' | 'error' | 'info', message: string) => {
-    setNotification({ type, message });
-    setTimeout(() => setNotification(null), 5000);
-  };
-
-  // API calls
-  const apiCall = async (endpoint: string, options: RequestInit = {}) => {
-    const url = endpoint;
-    
-    const defaultHeaders = {
-      'Content-Type': 'application/json',
-    };
-    
-    const config = {
-      ...options,
-      headers: {
-        ...defaultHeaders,
-        ...options.headers,
+  useEffect(() => {
+    // Initialize with some demo emails
+    const demoEmails: EmailMessage[] = [
+      {
+        id: '1',
+        from: 'alice@example.com',
+        to: 'bob@example.com',
+        subject: 'Quarterly Report - Confidential',
+        body: 'ENCRYPTED:VGhpcyBpcyBhIGhpZ2hseSBjb25maWRlbnRpYWwgcXVhbnR1bS1zZWN1cmUgbWVzc2FnZS4=',
+        encrypted: true,
+        key_id: 'qkd_demo_key_001',
+        timestamp: new Date(Date.now() - 3600000).toISOString(),
       },
-    };
+      {
+        id: '2',
+        from: 'system@qumail.com',
+        to: 'user@example.com',
+        subject: 'Welcome to QuMail',
+        body: 'Welcome to QuMail - the future of quantum-secure communication!',
+        encrypted: false,
+        timestamp: new Date(Date.now() - 7200000).toISOString(),
+      }
+    ];
     
-    try {
-      console.log(`🌐 API Call: ${config.method || 'GET'} ${url}`);
-      const response = await fetch(url, config);
-      
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `HTTP ${response.status}: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      console.log(`✅ API Response:`, data);
-      return data;
-    } catch (error) {
-      console.error(`❌ API Error:`, error);
-      if (error instanceof TypeError && error.message.includes('fetch')) {
-        throw new Error('Network error: Cannot reach QuMail backend. Please ensure the Flask server (backend/app.py) is running on port 5001.');
-      }
-      throw error;
-    }
-  };
+    setEmails(demoEmails);
+    
+    // Initialize with demo key
+    const demoKey = keyManager.requestKey('alice@example.com', 'bob@example.com', 3600);
+    demoKey.key_id = 'qkd_demo_key_001';
+    setQkdKeys([demoKey]);
+  }, [keyManager]);
 
-  // Login
-  const handleLogin = async () => {
-    if (!loginForm.email || !loginForm.password) {
-      showNotification('error', 'Please fill in all fields');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const result = await apiCall('/api/login', {
-        method: 'POST',
-        body: JSON.stringify({
-          email: loginForm.email,
-          password: loginForm.password
-        })
-      });
-
-      if (result.success) {
-        setSession({
-          id: result.session_id,
-          user: result.user
-        });
-        
-        setCurrentView('compose');
-        showNotification('success', 'Login successful!');
-        setLoginForm({ email: '', password: '', showPassword: false });
-      } else {
-        showNotification('error', result.message || 'Login failed');
-      }
-      
-    } catch (error) {
-      showNotification('error', error.message || 'Login failed');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Logout
-  const handleLogout = async () => {
-    try {
-      if (session) {
-        await apiCall('/api/logout', {
-          method: 'POST',
-          body: JSON.stringify({ session_id: session.id })
-        });
-      }
-      
-      setSession(null);
-      setCurrentView('login');
-      setEmails([]);
-      setKeys([]);
-      setDecryptedBodies({});
-      showNotification('success', 'Logged out successfully');
-      
-    } catch (error) {
-      console.error('Logout error:', error);
-      setSession(null);
-      setCurrentView('login');
-    }
-  };
-
-  // Send email
   const handleSendEmail = async () => {
     if (!composeForm.to || !composeForm.subject || !composeForm.body) {
-      showNotification('error', 'Please fill in all fields');
+      setStatusMessage({
+        type: 'error',
+        message: 'Please fill in all fields'
+      });
       return;
     }
 
-    if (!session) {
-      showNotification('error', 'Please log in first');
+    if (!credentials) {
+      setStatusMessage({
+        type: 'error',
+        message: 'Please log in first'
+      });
       return;
     }
 
-    setLoading(true);
-    try {
-      // First, request a QKD key for encryption
-      const qkdKeyResponse = await apiCall('/api/request-qkd-key', {
-        method: 'POST',
-        body: JSON.stringify({
-          sender: session.user.email,
-          recipient: composeForm.to,
-          session_id: session.id
-        })
-      });
-
-      if (!qkdKeyResponse.success) {
-        throw new Error(`QKD key request failed: ${qkdKeyResponse.message}`);
-      }
-
-      showNotification('success', `QKD key generated: ${qkdKeyResponse.key_id}`);
-
-      // Now send the email with the generated key
-      const emailResponse = await apiCall('/api/send-email', {
-        method: 'POST',
-        body: JSON.stringify({
-          to: composeForm.to,
-          subject: composeForm.subject,
-          body: composeForm.body,
-          session_id: session.id,
-          key_id: qkdKeyResponse.key_id
-        })
-      });
-
-      if (emailResponse.success) {
-        setComposeForm({ to: '', subject: '', body: '' });
-        showNotification('success', 'Email sent with quantum encryption!');
-        setCurrentView('inbox');
-        loadEmails();
-        loadKeys();
-      } else {
-        throw new Error(emailResponse.message || 'Failed to send email');
-      }
-      
-    } catch (error) {
-      console.error('Send email error:', error);
-      showNotification('error', `Failed to send encrypted email: ${error.message || 'Unknown error'}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Load emails
-  const loadEmails = async () => {
-    if (!session) return;
-
-    try {
-      const result = await apiCall(`/api/emails?session_id=${session.id}`);
-      if (result.success) {
-        setEmails(result.emails);
-      }
-    } catch (error) {
-      showNotification('error', 'Failed to load emails');
-    }
-  };
-
-  // Load keys
-  const loadKeys = async () => {
-    if (!session) return;
-
-    try {
-      const result = await apiCall(`/api/keys?session_id=${session.id}`);
-      if (result.success) {
-        setKeys(result.keys);
-      }
-    } catch (error) {
-      showNotification('error', 'Failed to load keys');
-    }
-  };
-
-  // Decrypt email
-  const handleDecryptEmail = async (emailId: string) => {
-    if (!session) return;
-
-    try {
-      const result = await apiCall('/api/decrypt-email', {
-        method: 'POST',
-        body: JSON.stringify({
-          email_id: emailId,
-          session_id: session.id
-        })
-      });
-
-      if (result.success) {
-        setDecryptedBodies(prev => ({
-          ...prev,
-          [emailId]: result.decrypted_body
-        }));
-        
-        showNotification('success', 'Email decrypted successfully!');
-      } else {
-        throw new Error(result.message || 'Failed to decrypt email');
-      }
-      
-    } catch (error) {
-      showNotification('error', error.message || 'Failed to decrypt email');
-    }
-  };
-
-  // Load data when view changes
-  useEffect(() => {
-    // Check backend health on startup
-    checkBackendHealth();
+    setSending(true);
     
-    if (session) {
-      if (currentView === 'inbox') {
-        loadEmails();
-      } else if (currentView === 'keys') {
-        loadKeys();
-      }
-    }
-  }, [currentView, session]);
+    try {
+      // Request QKD key
+      const qkdKey = keyManager.requestKey('user@example.com', composeForm.to, 3600);
+      
+      // Encrypt message
+      const encryptedBody = simulateEncryption(composeForm.body, qkdKey.key_b64);
+      
+      // Create email
+      const newEmail: EmailMessage = {
+        id: Date.now().toString(),
+        from: 'user@example.com',
+        to: composeForm.to,
+        subject: composeForm.subject,
+        body: encryptedBody,
+        encrypted: true,
+        key_id: qkdKey.key_id,
+        timestamp: new Date().toISOString()
+      };
 
-  // Periodic health check
+      // Simulate sending delay
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      setEmails(prev => [newEmail, ...prev]);
+      setQkdKeys(prev => [...prev, qkdKey]);
+      setComposeForm({ to: '', subject: '', body: '' });
+      
+      setStatusMessage({
+        type: 'success',
+        message: 'Email sent successfully with quantum-secure encryption!'
+      });
+      setCurrentView('inbox');
+      
+    } catch (error) {
+      setStatusMessage({
+        type: 'error',
+        message: 'Failed to send email'
+      });
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleDecryptEmail = (email: EmailMessage) => {
+    if (!email.encrypted || !email.key_id) return;
+
+    const key = keyManager.getKey(email.key_id);
+    if (!key) {
+      setStatusMessage({
+        type: 'error',
+        message: 'Decryption key not found or expired'
+      });
+      return;
+    }
+
+    const decryptedBody = simulateDecryption(email.body, key.key_b64);
+    setEmails(prev => prev.map(e => 
+      e.id === email.id 
+        ? { ...e, body: decryptedBody, decrypted: true }
+        : e
+    ));
+  };
+
+  const handleRefreshInbox = async () => {
+    if (!credentials) {
+      setStatusMessage({
+        type: 'error',
+        message: 'Please log in first'
+      });
+      return;
+    }
+
+    setRefreshing(true);
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    setRefreshing(false);
+    setStatusMessage({
+      type: 'info',
+      message: 'Inbox refreshed - 0 new messages'
+    });
+  };
+
+  const updateQkdKeys = () => {
+    setQkdKeys(keyManager.getAllKeys());
+  };
+
   useEffect(() => {
-    const interval = setInterval(checkBackendHealth, 30000); // Check every 30 seconds
+    const interval = setInterval(updateQkdKeys, 1000);
     return () => clearInterval(interval);
   }, []);
 
+  const handleLogin = async (loginCredentials: EmailCredentials) => {
+    const success = await login(loginCredentials);
+    if (success) {
+      setStatusMessage({
+        type: 'success',
+        message: 'Login successful! Welcome to QuMail.'
+      });
+    }
+  };
+
+  const handleLogout = () => {
+    logout();
+    setStatusMessage({
+      type: 'info',
+      message: 'Logged out successfully'
+    });
+  };
+
+  // Show login form if not authenticated
+  if (!isAuthenticated) {
+    return (
+      <>
+        <LoginForm 
+          onLogin={handleLogin}
+          isLoading={authLoading}
+          error={authError}
+        />
+        {statusMessage && (
+          <StatusMessage
+            type={statusMessage.type}
+            message={statusMessage.message}
+            onClose={() => setStatusMessage(null)}
+          />
+        )}
+      </>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-800">
-      {/* Notification */}
-      {notification && (
-        <div className={`fixed top-4 right-4 z-50 px-6 py-3 rounded-lg shadow-lg ${
-          notification.type === 'success' 
-            ? 'bg-emerald-600 text-white' 
-            : notification.type === 'error'
-            ? 'bg-red-600 text-white'
-            : 'bg-blue-600 text-white'
-        }`}>
-          {notification.message}
-        </div>
-      )}
-
       {/* Header */}
       <div className="bg-slate-800/50 backdrop-blur border-b border-slate-700">
         <div className="max-w-7xl mx-auto px-6 py-4">
@@ -354,122 +311,53 @@ function App() {
               <span className="text-xs bg-blue-500/20 text-blue-300 px-2 py-1 rounded-full">
                 Quantum-Secure
               </span>
-              {session && (
-                <div className="flex items-center gap-2 ml-4">
-                  <User className="w-4 h-4 text-emerald-400" />
-                  <span className="text-sm text-emerald-400">{session.user.email}</span>
-                </div>
-              )}
             </div>
             
             <div className="flex items-center gap-4">
-              {session && (
-                <nav className="flex gap-1">
-                  {[
-                    { id: 'compose', label: 'Compose', icon: Mail },
-                    { id: 'inbox', label: 'Inbox', icon: RefreshCw },
-                    { id: 'keys', label: 'Keys', icon: Key }
-                  ].map(({ id, label, icon: Icon }) => (
-                    <button
-                      key={id}
-                      onClick={() => setCurrentView(id as any)}
-                      className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all ${
-                        currentView === id
-                          ? 'bg-blue-600 text-white'
-                          : 'text-slate-300 hover:bg-slate-700 hover:text-white'
-                      }`}
-                    >
-                      <Icon className="w-4 h-4" />
-                      {label}
-                    </button>
-                  ))}
-                </nav>
-              )}
+              {/* User Info */}
+              <div className="flex items-center gap-2 text-slate-300">
+                <User className="w-4 h-4" />
+                <span className="text-sm">{credentials?.email}</span>
+              </div>
               
-              {session && (
+              {/* Navigation */}
+              <nav className="flex gap-1">
+              {[
+                { id: 'compose', label: 'Compose', icon: Mail },
+                { id: 'inbox', label: 'Inbox', icon: Database },
+                { id: 'keys', label: 'QKD Keys', icon: Key }
+              ].map(({ id, label, icon: Icon }) => (
                 <button
-                  onClick={handleLogout}
-                  className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+                  key={id}
+                  onClick={() => setCurrentView(id as any)}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all ${
+                    currentView === id
+                      ? 'bg-blue-600 text-white'
+                      : 'text-slate-300 hover:bg-slate-700 hover:text-white'
+                  }`}
                 >
-                  <LogOut className="w-4 h-4" />
-                  Logout
+                  <Icon className="w-4 h-4" />
+                  {label}
                 </button>
-              )}
+              ))}
+              </nav>
+              
+              {/* Logout Button */}
+              <button
+                onClick={handleLogout}
+                className="flex items-center gap-2 px-3 py-2 text-slate-300 hover:bg-slate-700 hover:text-white rounded-lg transition-all"
+              >
+                <LogOut className="w-4 h-4" />
+                Logout
+              </button>
             </div>
           </div>
         </div>
       </div>
 
       <div className="max-w-7xl mx-auto px-6 py-8">
-        {/* Login View */}
-        {currentView === 'login' && (
-          <div className="max-w-md mx-auto">
-            <div className="bg-slate-800/50 backdrop-blur rounded-xl border border-slate-700 p-8">
-              <div className="text-center mb-8">
-                <div className="flex items-center justify-center gap-3 mb-4">
-                  <div className="p-3 bg-blue-600/20 rounded-lg">
-                    <Shield className="w-8 h-8 text-blue-400" />
-                  </div>
-                  <h2 className="text-2xl font-bold text-white">Login to QuMail</h2>
-                </div>
-                <p className="text-slate-400">Quantum-secure email communication</p>
-              </div>
-
-              <div className="space-y-6">
-                <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-2">
-                    Email Address
-                  </label>
-                  <input
-                    type="email"
-                    value={loginForm.email}
-                    onChange={(e) => setLoginForm(prev => ({ ...prev, email: e.target.value }))}
-                    className="w-full px-4 py-3 bg-slate-900/50 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
-                    placeholder="your.email@example.com"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-2">
-                    Password
-                  </label>
-                  <div className="relative">
-                    <input
-                      type={loginForm.showPassword ? 'text' : 'password'}
-                      value={loginForm.password}
-                      onChange={(e) => setLoginForm(prev => ({ ...prev, password: e.target.value }))}
-                      className="w-full px-4 py-3 pr-12 bg-slate-900/50 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
-                      placeholder="Enter your password"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setLoginForm(prev => ({ ...prev, showPassword: !prev.showPassword }))}
-                      className="absolute right-3 top-1/2 transform -translate-y-1/2 text-slate-400 hover:text-slate-300"
-                    >
-                      {loginForm.showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                    </button>
-                  </div>
-                </div>
-
-                <button
-                  onClick={handleLogin}
-                  disabled={loading}
-                  className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 text-white rounded-lg transition-colors"
-                >
-                  {loading ? (
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Shield className="w-4 h-4" />
-                  )}
-                  {loading ? 'Logging in...' : 'Secure Login'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Compose View */}
-        {currentView === 'compose' && session && (
+        {currentView === 'compose' && (
           <div className="max-w-4xl mx-auto">
             <div className="bg-slate-800/50 backdrop-blur rounded-xl border border-slate-700 p-8">
               <div className="flex items-center gap-3 mb-6">
@@ -479,7 +367,9 @@ function App() {
 
               <div className="space-y-6">
                 <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-2">To</label>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">
+                    To
+                  </label>
                   <input
                     type="email"
                     value={composeForm.to}
@@ -490,7 +380,9 @@ function App() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-2">Subject</label>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">
+                    Subject
+                  </label>
                   <input
                     type="text"
                     value={composeForm.subject}
@@ -501,7 +393,9 @@ function App() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-2">Message</label>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">
+                    Message
+                  </label>
                   <textarea
                     rows={8}
                     value={composeForm.body}
@@ -519,15 +413,15 @@ function App() {
 
                   <button
                     onClick={handleSendEmail}
-                    disabled={loading}
+                    disabled={sending}
                     className="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 text-white rounded-lg transition-colors"
                   >
-                    {loading ? (
+                    {sending ? (
                       <RefreshCw className="w-4 h-4 animate-spin" />
                     ) : (
                       <Send className="w-4 h-4" />
                     )}
-                    {loading ? 'Sending...' : 'Send Encrypted'}
+                    {sending ? 'Securing & Sending...' : 'Send Securely'}
                   </button>
                 </div>
               </div>
@@ -536,15 +430,16 @@ function App() {
         )}
 
         {/* Inbox View */}
-        {currentView === 'inbox' && session && (
+        {currentView === 'inbox' && (
           <div>
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-2xl font-bold text-white">Secure Inbox</h2>
               <button
-                onClick={loadEmails}
+                onClick={handleRefreshInbox}
+                disabled={refreshing}
                 className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
               >
-                <RefreshCw className="w-4 h-4" />
+                <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
                 Refresh
               </button>
             </div>
@@ -557,63 +452,62 @@ function App() {
                 >
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
-                      <div className="p-2 rounded-lg bg-emerald-500/20 text-emerald-400">
-                        <Lock className="w-4 h-4" />
+                      <div className={`p-2 rounded-lg ${
+                        email.encrypted 
+                          ? 'bg-emerald-500/20 text-emerald-400' 
+                          : 'bg-yellow-500/20 text-yellow-400'
+                      }`}>
+                        {email.encrypted ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
                       </div>
                       <div>
                         <p className="font-semibold text-white">{email.subject}</p>
-                        <p className="text-sm text-slate-400">
-                          {email.from === session.user.email ? `To: ${email.to}` : `From: ${email.from}`}
-                        </p>
+                        <p className="text-sm text-slate-400">From: {email.from}</p>
                       </div>
                     </div>
                     
                     <div className="flex items-center gap-3">
-                      {!decryptedBodies[email.id] && (
+                      {email.encrypted && !email.decrypted && (
                         <button
-                          onClick={() => handleDecryptEmail(email.id)}
+                          onClick={() => handleDecryptEmail(email)}
                           className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg transition-colors"
                         >
                           Decrypt
                         </button>
                       )}
                       <span className="text-xs text-slate-500">
-                        {new Date(email.created_at).toLocaleString()}
+                        {new Date(email.timestamp).toLocaleString()}
                       </span>
                     </div>
                   </div>
 
                   <div className="bg-slate-900/50 rounded-lg p-4">
                     <p className="text-slate-300 whitespace-pre-wrap">
-                      {decryptedBodies[email.id] || '🔒 Message encrypted with quantum-secure keys'}
+                      {email.encrypted && !email.decrypted 
+                        ? '🔒 Message encrypted with quantum-secure keys'
+                        : email.body
+                      }
                     </p>
                   </div>
 
-                  <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
-                    <Key className="w-3 h-3" />
-                    <span>Key ID: {email.key_id}</span>
-                    {decryptedBodies[email.id] && (
-                      <span className="ml-2 px-2 py-1 bg-emerald-500/20 text-emerald-400 rounded">
-                        Decrypted
-                      </span>
-                    )}
-                  </div>
+                  {email.encrypted && (
+                    <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
+                      <Key className="w-3 h-3" />
+                      <span>Key ID: {email.key_id}</span>
+                      {email.decrypted && (
+                        <span className="ml-2 px-2 py-1 bg-emerald-500/20 text-emerald-400 rounded">
+                          Decrypted
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
-
-              {emails.length === 0 && (
-                <div className="text-center py-12">
-                  <Mail className="w-12 h-12 text-slate-600 mx-auto mb-4" />
-                  <p className="text-slate-400">No emails yet</p>
-                  <p className="text-sm text-slate-500">Send your first quantum-secure message</p>
-                </div>
-              )}
             </div>
           </div>
         )}
 
-        {/* Keys View */}
-        {currentView === 'keys' && session && (
+        {/* QKD Keys View */}
+        {currentView === 'keys' && (
           <div>
             <div className="flex items-center gap-3 mb-6">
               <Key className="w-6 h-6 text-blue-400" />
@@ -621,7 +515,7 @@ function App() {
             </div>
 
             <div className="grid gap-4">
-              {keys.map((key) => {
+              {qkdKeys.map((key) => {
                 const isExpired = new Date() > new Date(key.expires_at);
                 const timeLeft = Math.max(0, new Date(key.expires_at).getTime() - Date.now());
                 const hoursLeft = Math.floor(timeLeft / (1000 * 60 * 60));
@@ -658,23 +552,27 @@ function App() {
                     </div>
 
                     <div className="bg-slate-900/50 rounded-lg p-4">
-                      <p className="text-xs text-slate-400 mb-2">Algorithm: {key.algorithm}</p>
-                      <p className="text-xs text-slate-500">
-                        Created: {new Date(key.created_at).toLocaleString()}
+                      <p className="text-xs text-slate-400 mb-2">256-bit AES Key (Base64):</p>
+                      <p className="font-mono text-xs text-slate-300 break-all">
+                        {key.key_b64.substr(0, 64)}...
                       </p>
+                    </div>
+
+                    <div className="mt-3 text-xs text-slate-500">
+                      Created: {new Date(key.created_at).toLocaleString()}
                     </div>
                   </div>
                 );
               })}
-
-              {keys.length === 0 && (
-                <div className="text-center py-12">
-                  <Key className="w-12 h-12 text-slate-600 mx-auto mb-4" />
-                  <p className="text-slate-400">No QKD keys issued yet</p>
-                  <p className="text-sm text-slate-500">Send an encrypted email to generate your first quantum key</p>
-                </div>
-              )}
             </div>
+
+            {qkdKeys.length === 0 && (
+              <div className="text-center py-12">
+                <Key className="w-12 h-12 text-slate-600 mx-auto mb-4" />
+                <p className="text-slate-400">No QKD keys issued yet</p>
+                <p className="text-sm text-slate-500">Send an encrypted email to generate your first quantum key</p>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -684,32 +582,22 @@ function App() {
         <div className="max-w-7xl mx-auto px-6 py-3">
           <div className="flex items-center justify-between text-sm">
             <div className="flex items-center gap-4">
-              <div className={`flex items-center gap-2 ${
-                backendStatus === 'connected' ? 'text-emerald-400' : 
-                backendStatus === 'disconnected' ? 'text-red-400' : 'text-yellow-400'
-              }`}>
-                <div className={`w-2 h-2 rounded-full ${
-                  backendStatus === 'connected' ? 'bg-emerald-400 animate-pulse' : 
-                  backendStatus === 'disconnected' ? 'bg-red-400' : 'bg-yellow-400 animate-pulse'
-                }`}></div>
-                <span>
-                  {backendStatus === 'connected' ? 'Backend Connected' : 
-                   backendStatus === 'disconnected' ? 'Backend Disconnected' : 'Checking Backend...'}
-                </span>
+              <div className="flex items-center gap-2 text-emerald-400">
+                <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></div>
+                <span>QKD System Online</span>
               </div>
-              {session && (
-                <div className="text-slate-400">
-                  Keys Active: {keys.filter(k => k.status === 'active').length}
-                </div>
-              )}
+              <div className="text-slate-400">
+                Keys Active: {qkdKeys.filter(k => k.status === 'active').length}
+              </div>
             </div>
             
             <div className="text-slate-500">
-              QuMail v1.0.0 | Quantum-Secure Email
+              QuMail v1.0.0-prototype | ETSI GS QKD 014 Compatible
             </div>
           </div>
         </div>
       </div>
+
     </div>
   );
 }

@@ -1,17 +1,16 @@
 {
-  "name": "qumail-quantum-secure-email",
+  "name": "vite-react-typescript-starter",
   "private": true,
-  "version": "1.0.0",
+  "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --config vite.config.ts",
-    "build": "tsc && vite build",
+    "dev": "vite",
+    "build": "vite build",
     "lint": "eslint .",
-    "backend": "source .venv/bin/activate && python start_backend.py",
-    "start": "source .venv/bin/activate && python start_backend.py",
-    "dev:all": "concurrently \"npm run backend\" \"npm run dev\""
+    "preview": "vite preview"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.57.4",
     "lucide-react": "^0.344.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
@@ -22,7 +21,6 @@
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
     "autoprefixer": "^10.4.18",
-    "concurrently": "^8.2.0",
     "eslint": "^9.9.1",
     "eslint-plugin-react-hooks": "^5.1.0-rc.0",
     "eslint-plugin-react-refresh": "^0.4.11",
@@ -32,9 +30,5 @@
     "typescript": "^5.5.3",
     "typescript-eslint": "^8.3.0",
     "vite": "^5.4.2"
-  },
-  "engines": {
-    "node": ">=18"
   }
-
 }
