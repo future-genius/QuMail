@@ -53,15 +53,16 @@ def load_config():
     missing_fields = [field for field in required_fields if not config[field]]
     
     if missing_fields:
-        print(f"❌ Missing required environment variables: {', '.join(missing_fields.upper())}")
-        print("\n📝 Required environment variables:")
-        print("   SMTP_HOST=smtp.gmail.com")
-        print("   SMTP_PORT=587")
-        print("   SMTP_USER=your_email@gmail.com")
-        print("   SMTP_PASS=your_app_password")
-        print("   SENDER_EMAIL=your_email@gmail.com")
-        print("\n💡 For Gmail, use App Passwords instead of your regular password")
-        return None
+      print(f"❌ Missing required environment variables: {', '.join(field.upper() for field in missing_fields)}")
+      print("\n📝 Required environment variables:")
+      print("   SMTP_HOST=smtp.gmail.com")
+      print("   SMTP_PORT=587")
+      print("   SMTP_USER=your_email@gmail.com")
+      print("   SMTP_PASS=your_app_password")
+      print("   SENDER_EMAIL=your_email@gmail.com")
+      print("\n💡 For Gmail, use App Passwords instead of your regular password")
+      return None
+
     
     return config
 
