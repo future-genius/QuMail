@@ -1,0 +1,20 @@
+{
+  "smtp_server": "smtp.gmail.com",
+  "smtp_port": 587,
+  "smtp_username": "your_email@gmail.com",
+  "smtp_password": "your_app_password",
+  "sender_email": "your_email@gmail.com",
+  
+  "imap_server": "imap.gmail.com",
+  "imap_port": 993,
+  "imap_username": "your_email@gmail.com",
+  "imap_password": "your_app_password",
+  
+  "_comment": "For Gmail, use App Passwords instead of your regular password",
+  "_setup_instructions": [
+    "1. Enable 2-factor authentication on your Google account",
+    "2. Go to Google Account settings > Security > 2-Step Verification",
+    "3. Generate an App Password for QuMail",
+    "4. Use the generated App Password in the password fields above"
+  ]
+}
